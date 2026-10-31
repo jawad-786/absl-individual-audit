@@ -100,6 +100,7 @@ BUILTIN_SCHEME_NAMES = {
     "ULIF01507/08/08BSLIINCADV109": "Individual Income Advantage Fund",
     "ULIF01723/06/09BSLSUPER20109": "Super 20 Fund",
     "ULIF01911/12/09BSLITITAN1109": "Titanium 1 Fund",
+    "ULIF02011/12/09BSLITITAN2109": "Titanium 2 Fund",
     "ULIF02203/02/10BSLPLATPR1109": "Platinum Premier Fund",
     "ULIF02408/09/10BSLPLATADV109": "Platinum Advantage Fund",
     "ULIF02707/10/11BSLIPUREEQ109": "Individual Pure Equity Fund",
@@ -382,7 +383,7 @@ def parse_master_sheets(master_bytes):
     return parsed
 
 # -------------------------------------------------------------
-# AUM PARSER FOR "AUM with Fund names.xlsx" (Extracts from Col B & Col D)
+# AUM PARSER FOR "AUM with Fund names.xlsx" (Handles 0.00 Cr funds)
 # -------------------------------------------------------------
 @st.cache_data(show_spinner=False)
 def parse_aum_file(aum_bytes):
@@ -398,7 +399,7 @@ def parse_aum_file(aum_bytes):
             name_val = str(df.iloc[r, 0]).strip() if pd.notnull(df.iloc[r, 0]) else ""
             code_val = str(df.iloc[r, 1]).strip() if pd.notnull(df.iloc[r, 1]) else ""
 
-            # Extract Crores value (Col 3 / Col 6 / Col 2)
+            # Extract Crores value (Col 3 or fallback to Col 2 / 1e7)
             v_cr = df.iloc[r, 3] if len(df.columns) > 3 and pd.notnull(df.iloc[r, 3]) else None
             if v_cr is None and len(df.columns) > 2 and pd.notnull(df.iloc[r, 2]):
                 v_raw = df.iloc[r, 2]
@@ -408,6 +409,9 @@ def parse_aum_file(aum_bytes):
             if code_val and code_val not in ["Row Labels", "nan", "Grand Total"]:
                 try:
                     cr_num = float(v_cr) if v_cr is not None else 0.0
+                    # Handle small scientific notation as 0.00
+                    if abs(cr_num) < 0.001:
+                        cr_num = 0.0
                     aum_dict[code_val] = {
                         "Name": name_val if name_val != "nan" else "",
                         "Code": code_val,
@@ -505,7 +509,8 @@ EXHAUSTIVE_SFIN_MAP = {
     "ULIF01217/10/07BSLINMULTI109": "IND-MULTI",
     "ULIF01507/08/08BSLIINCADV109": "INC-ADV-FUND",
     "ULIF01723/06/09BSLSUPER20109": "SUPER20",
-    "ULIF01911/12/09BSLITITAN1109": "TITANIUM",
+    "ULIF01911/12/09BSLITITAN1109": "TITANIUM",   # Titanium 1
+    "ULIF02011/12/09BSLITITAN2109": "TITANIUM2",  # Titanium 2
     "ULIF02203/02/10BSLPLATPR1109": "PLATINUM-PR1",
     "ULIF02408/09/10BSLPLATADV109": "PLATINUMADV",
     "ULIF02707/10/11BSLIPUREEQ109": "BSLIPUREEQ",
@@ -520,7 +525,7 @@ EXHAUSTIVE_SFIN_MAP = {
     "ULIF03722/06/18ABSLIMUMNC109": "MNC",
     "ULIF03810/11/23ABSLESGFND109": "ABSLIESG",
     "ULIF03910/11/23ABSLSMALCP109": "SMALLCAP",
-    "ULIF04015/06/24ABSLIALPHA109": "INDALPHA50",
+    "ULIF04015/06/24ABSLIALPHA109": "INDALPHA50",  # Nifty 50 Alpha
     "ULIF04101/10/24ABSLMOMNTM109": "INDMOMNTM",
     "ULIF04206/11/25ABSLDIVYLD109": "INDDIVYIELD",
     "ULIF04312/02/26ABSLFLXCAP109": "INDFLEXICAP",
@@ -540,7 +545,7 @@ def get_exact_aum_for_sfin(sfin, fund_name, aum_data):
     # 2. Match by Fund Name in AUM records
     clean_name = norm_txt(fund_name)
     for code, info in aum_data.items():
-        if info["Name"] and norm_txt(info["Name"]) == clean_name:
+        if info.get("Name") and norm_txt(info["Name"]) == clean_name:
             return code, info["Total AUM (Cr)"]
 
     # 3. Match by Code in SFIN
@@ -900,7 +905,7 @@ with tabs[2]:
 
             if aum_data:
                 aum_codes = sorted(list(aum_data.keys()))
-                default_idx = aum_codes.index(found_code) if found_code in aum_codes else 0
+                default_idx = aum_codes.index(found_code) if (found_code and found_code in aum_codes) else 0
                 
                 selected_aum_code = st.selectbox(
                     "Matched AUM Code (From AUM Excel):",
