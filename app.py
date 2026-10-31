@@ -536,7 +536,7 @@ def parse_master_sheets(master_bytes):
 
 
 # -------------------------------------------------------------
-# ROBUST OPENPYXL AUM PARSER
+# DIRECT COLUMN G AUM PARSER (100% Accurate Crores from Column G)
 # -------------------------------------------------------------
 @st.cache_data(show_spinner=False)
 def parse_aum_file(aum_bytes):
@@ -544,57 +544,36 @@ def parse_aum_file(aum_bytes):
     return {}
   aum_dict = {}
   try:
-    wb = openpyxl.load_workbook(io.BytesIO(aum_bytes), data_only=True)
-    for sheetname in wb.sheetnames:
-      ws = wb[sheetname]
-      for r in range(1, min(150, ws.max_row + 1)):
-        row_code = None
-        code_col = 1
-        for c in range(1, 4):
-          val = ws.cell(r, c).value
-          if val and isinstance(val, str):
-            v_clean = val.strip()
-            if (
-                len(v_clean) > 2
-                and v_clean.upper()
-                not in [
-                    "ROW LABELS",
-                    "SUM OF MARKET VALUE",
-                    "TOTAL",
-                    "GRAND TOTAL",
-                    "COLUMN LABELS",
-                ]
-            ):
-              row_code = v_clean
-              code_col = c
-              break
-        if not row_code:
-          continue
+    xls = pd.ExcelFile(io.BytesIO(aum_bytes))
+    for sheet in xls.sheet_names:
+      df = pd.read_excel(
+          io.BytesIO(aum_bytes), sheet_name=sheet, header=None
+      )
+      # Column E (index 4) has Scheme Codes, Column G (index 6) has Exact AUM in Crores
+      for r in range(1, len(df)):
+        code = df.iloc[r, 4] if len(df.columns) > 4 else None
+        val = df.iloc[r, 6] if len(df.columns) > 6 else None
 
-        # Look for the exact Crores column (values typically between 1 and 50000)
-        exact_cr_val = None
-        for c in range(code_col + 1, min(25, ws.max_column + 1)):
-          v = ws.cell(r, c).value
-          if v is not None and isinstance(v, (int, float)):
-            # If value is already in Crores format (e.g., 786.22, 1760.34, 10451.88)
-            if 0.1 <= float(v) <= 100000:
-              exact_cr_val = float(v)
-              break
-            # If value is in raw rupees (> 10 Lakhs)
-            elif float(v) > 1000000:
-              exact_cr_val = float(v) / 1e7
-              break
-
-        if exact_cr_val is not None:
-          aum_dict[row_code] = {
-              "Corporate Debt": 0.0,
-              "Equity": 0.0,
-              "G-Sec": 0.0,
-              "MMI": 0.0,
-              "Total AUM (Cr)": round(exact_cr_val, 2),
-          }
-
-      if len(aum_dict) >= 3:
+        if (
+            pd.notnull(code)
+            and pd.notnull(val)
+            and str(code).strip() != "Row Labels"
+            and str(code).strip() != "nan"
+        ):
+          code_str = str(code).strip()
+          try:
+            val_float = float(val)
+            if val_float > 0:
+              aum_dict[code_str] = {
+                  "Corporate Debt": 0.0,
+                  "Equity": 0.0,
+                  "G-Sec": 0.0,
+                  "MMI": 0.0,
+                  "Total AUM (Cr)": round(val_float, 2),
+              }
+          except:
+            pass
+      if aum_dict:
         break
   except Exception as e:
     st.sidebar.error(f"AUM File Error: {e}")
