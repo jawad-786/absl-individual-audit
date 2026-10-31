@@ -1,8 +1,8 @@
 import io
+import re
 import openpyxl
 import pandas as pd
 import pypdf
-import re
 import streamlit as st
 
 st.set_page_config(
@@ -104,294 +104,256 @@ BUILTIN_SCHEME_NAMES = {
 }
 
 def color_status_cells(val):
-  if not isinstance(val, str):
+    if not isinstance(val, str):
+        return ""
+    val_upper = val.upper().strip()
+    if any(k in val_upper for k in ["MISMATCH", "NOT IN PDF", "BREACH", "FAIL", "DIFF"]):
+        return "background-color: #f8d7da; color: #721c24; font-weight: bold;"
+    elif any(k in val_upper for k in ["PASS", "MATCH", "COMPLIANT"]):
+        return "background-color: #d4edda; color: #155724; font-weight: bold;"
+    elif any(k in val_upper for k in ["PENDING", "WARNING"]):
+        return "background-color: #fff3cd; color: #856404; font-weight: bold;"
     return ""
-  val_upper = val.upper().strip()
-  if any(
-      k in val_upper
-      for k in ["MISMATCH", "NOT IN PDF", "BREACH", "FAIL", "DIFF"]
-  ):
-    return "background-color: #f8d7da; color: #721c24; font-weight: bold;"
-  elif any(k in val_upper for k in ["PASS", "MATCH", "COMPLIANT"]):
-    return "background-color: #d4edda; color: #155724; font-weight: bold;"
-  elif any(k in val_upper for k in ["PENDING", "WARNING", "CONCENTRATION"]):
-    return "background-color: #fff3cd; color: #856404; font-weight: bold;"
-  return ""
 
 def apply_status_style(df, column_name):
-  styler = df.style
-  if hasattr(styler, "map"):
-    return styler.map(color_status_cells, subset=[column_name])
-  else:
-    return styler.applymap(color_status_cells, subset=[column_name])
+    styler = df.style
+    if hasattr(styler, "map"):
+        return styler.map(color_status_cells, subset=[column_name])
+    else:
+        return styler.applymap(color_status_cells, subset=[column_name])
+
+def norm_txt(s):
+    return re.sub(r"[^A-Za-z0-9]", "", str(s or "")).upper()
 
 # Sidebar
 with st.sidebar:
-  st.header("📂 Data Sources")
-  uploaded_pdf = st.file_uploader(
-      "1. Factsheet PDF (Individual/Group)", type=["pdf"]
-  )
-  uploaded_master = st.file_uploader("2. Master Factsheet Excel", type=["xlsx"])
-  uploaded_nav = st.file_uploader(
-      "3. Birla Nav Excel (Birla Nav.xlsx)", type=["xlsx"]
-  )
-  uploaded_aum = st.file_uploader(
-      "4. AUM Breakup Excel (AUM Breakup.xlsx)", type=["xlsx"]
-  )
-  uploaded_ytm = st.file_uploader(
-      "5. Yield & Duration Excel (Yield...xlsx)", type=["xlsx"]
-  )
-  tolerance = st.slider(
-      "Tolerance Threshold (%)", 0.00, 0.10, 0.02, 0.01
-  )
+    st.header("📂 Data Sources")
+    uploaded_pdf = st.file_uploader("1. Factsheet PDF (Individual/Group)", type=["pdf"])
+    uploaded_master = st.file_uploader("2. Master Factsheet Excel", type=["xlsx"])
+    uploaded_nav = st.file_uploader("3. Birla Nav Excel (Birla Nav.xlsx)", type=["xlsx"])
+    uploaded_aum = st.file_uploader("4. AUM Breakup Excel (AUM Breakup.xlsx)", type=["xlsx"])
+    uploaded_ytm = st.file_uploader("5. Yield & Duration Excel (Yield...xlsx)", type=["xlsx"])
+    tolerance = st.slider("Tolerance Threshold (%)", 0.00, 0.10, 0.02, 0.01)
 
 # PDF Parser
 @st.cache_data(show_spinner=False)
 def extract_pdf_data(pdf_bytes):
-  schemes_pdf = {}
-  if not pdf_bytes:
-    return schemes_pdf
-  try:
-    reader = pypdf.PdfReader(io.BytesIO(pdf_bytes))
-    for page_idx, page in enumerate(reader.pages):
-      text = page.extract_text() or ""
-      sfin_matches = re.findall(r"(?:ULIF|ULGF)[A-Za-z0-9/]{10,35}", text)
-      if not sfin_matches:
-        continue
-      nav_candidates = re.findall(r"\b\d{1,3}\.\d{4}\b", text)
-      aum_candidates = re.findall(r"([\d\.]+)\s*Cr", text)
+    schemes_pdf = {}
+    if not pdf_bytes:
+        return schemes_pdf
+    try:
+        reader = pypdf.PdfReader(io.BytesIO(pdf_bytes))
+        for page_idx, page in enumerate(reader.pages):
+            text = page.extract_text() or ""
+            sfin_matches = re.findall(r"(?:ULIF|ULGF)[A-Za-z0-9/]{10,35}", text)
+            if not sfin_matches:
+                continue
+            nav_candidates = re.findall(r"\b\d{1,3}\.\d{4}\b", text)
+            aum_candidates = re.findall(r"([\d\.]+)\s*Cr", text)
 
-      for sfin in set(sfin_matches):
-        sfin = sfin.strip()
-        best_name = BUILTIN_SCHEME_NAMES.get(sfin) or f"Scheme ({sfin})"
-        schemes_pdf[sfin] = {
-            "page": page_idx + 1,
-            "sfin": sfin,
-            "fund_name": best_name,
-            "page_text": text,
-            "nav_candidates": [float(n) for n in nav_candidates],
-            "aum_candidates": [float(a) for a in aum_candidates],
-        }
-  except Exception:
-    pass
-  return schemes_pdf
+            for sfin in set(sfin_matches):
+                sfin = sfin.strip()
+                best_name = BUILTIN_SCHEME_NAMES.get(sfin) or f"Scheme ({sfin})"
+                schemes_pdf[sfin] = {
+                    "page": page_idx + 1,
+                    "sfin": sfin,
+                    "fund_name": best_name,
+                    "page_text": text,
+                    "nav_candidates": [float(n) for n in nav_candidates],
+                    "aum_candidates": [float(a) for a in aum_candidates],
+                }
+    except Exception:
+        pass
+    return schemes_pdf
 
 # Master Excel Parser
 @st.cache_data(show_spinner=False)
 def parse_master_sheets(master_bytes):
-  if not master_bytes:
-    return {}
-  parsed = {}
-  try:
-    wb = openpyxl.load_workbook(io.BytesIO(master_bytes), data_only=True)
-    for sheet_name in wb.sheetnames:
-      ws = wb[sheet_name]
-      fund_name = None
-      sfin = None
-      for r in range(1, 30):
-        for c in range(1, 25):
-          val = ws.cell(r, c).value
-          if val and isinstance(val, str):
-            val_str = val.strip()
-            if ("ULIF" in val_str or "ULGF" in val_str) and not sfin:
-              m_sfin = re.search(r"(?:ULIF|ULGF)[A-Za-z0-9/]{10,35}", val_str)
-              if m_sfin:
-                sfin = m_sfin.group(0).strip()
-      if not sfin:
-        m_sheet = re.search(r"(?:ULIF|ULGF)[A-Za-z0-9/]{10,35}", sheet_name)
-        if m_sheet:
-          sfin = m_sheet.group(0).strip()
-        elif len(wb.sheetnames) > 3:
-          sfin = sheet_name.strip()
-      if not sfin:
-        continue
+    if not master_bytes:
+        return {}
+    parsed = {}
+    try:
+        wb = openpyxl.load_workbook(io.BytesIO(master_bytes), data_only=True)
+        for sheet_name in wb.sheetnames:
+            ws = wb[sheet_name]
+            fund_name = None
+            sfin = None
+            for r in range(1, 30):
+                for c in range(1, 25):
+                    val = ws.cell(r, c).value
+                    if val and isinstance(val, str):
+                        val_str = val.strip()
+                        if ("ULIF" in val_str or "ULGF" in val_str) and not sfin:
+                            m_sfin = re.search(r"(?:ULIF|ULGF)[A-Za-z0-9/]{10,35}", val_str)
+                            if m_sfin:
+                                sfin = m_sfin.group(0).strip()
+            if not sfin:
+                m_sheet = re.search(r"(?:ULIF|ULGF)[A-Za-z0-9/]{10,35}", sheet_name)
+                if m_sheet:
+                    sfin = m_sheet.group(0).strip()
+                elif len(wb.sheetnames) > 3:
+                    sfin = sheet_name.strip()
+            if not sfin:
+                continue
 
-      fund_name = BUILTIN_SCHEME_NAMES.get(sfin) or ws.cell(2, 3).value or sheet_name
+            fund_name = BUILTIN_SCHEME_NAMES.get(sfin) or ws.cell(2, 3).value or sheet_name
 
-      # Asset Allocation
-      asset_alloc = []
-      for r in range(6, 20):
-        for c in range(5, 12):
-          cat = ws.cell(r, c).value
-          if cat and any(
-              ac in str(cat).upper()
-              for ac in ["EQUITY", "DEBT", "GOVERNMENT", "CORPORATE", "MMI", "TOTAL"]
-          ):
-            actual = ws.cell(r, c + 1).value
-            rng = ws.cell(r, c + 2).value
-            if actual is not None and str(cat).strip().upper() not in ["ASSET CATEGORY", "ASSET ALLOCATION"]:
-              try:
-                act_val = float(actual)
-                pct = act_val * 100 if act_val <= 1.0 else act_val
-                asset_alloc.append({
-                    "Asset Category": str(cat).strip(),
-                    "Actual (%)": f"{pct:.2f}%",
-                    "Raw Actual": round(pct, 2),
-                    "Defined Mandate Range": str(rng) if rng else "N/A",
-                })
-              except:
-                pass
-            break
+            # Asset Allocation
+            asset_alloc = []
+            for r in range(6, 20):
+                for c in range(5, 12):
+                    cat = ws.cell(r, c).value
+                    if cat and any(ac in str(cat).upper() for ac in ["EQUITY", "DEBT", "GOVERNMENT", "CORPORATE", "MMI", "TOTAL"]):
+                        actual = ws.cell(r, c + 1).value
+                        rng = ws.cell(r, c + 2).value
+                        if actual is not None and str(cat).strip().upper() not in ["ASSET CATEGORY", "ASSET ALLOCATION"]:
+                            try:
+                                act_val = float(actual)
+                                pct = act_val * 100 if act_val <= 1.0 else act_val
+                                asset_alloc.append({
+                                    "Asset Category": str(cat).strip(),
+                                    "Actual (%)": f"{pct:.2f}%",
+                                    "Raw Actual": round(pct, 2),
+                                    "Defined Mandate Range": str(rng) if rng else "N/A",
+                                })
+                            except:
+                                pass
+                        break
 
-      # Rating Profile
-      ratings = []
-      for r in range(1, 15):
-        rat = ws.cell(r, 18).value
-        pct = ws.cell(r, 19).value
-        if rat and pct is not None and str(rat).strip() in ["AAA", "SOV", "AA+", "AA", "A1+", "AA-", "A+"]:
-          try:
-            p_val = float(pct) * 100 if float(pct) <= 1.0 else float(pct)
-            ratings.append({"Rating": str(rat).strip(), "Raw Weight": round(p_val, 2)})
-          except:
-            pass
+            # Rating Profile
+            ratings = []
+            for r in range(1, 15):
+                rat = ws.cell(r, 18).value
+                pct = ws.cell(r, 19).value
+                if rat and pct is not None and str(rat).strip() in ["AAA", "SOV", "AA+", "AA", "A1+", "AA-", "A+"]:
+                    try:
+                        p_val = float(pct) * 100 if float(pct) <= 1.0 else float(pct)
+                        ratings.append({"Rating": str(rat).strip(), "Raw Weight": round(p_val, 2)})
+                    except:
+                        pass
 
-      # Sector Allocation
-      sectors = []
-      for r in range(25, 60):
-        for c in range(5, 10):
-          sec_name = ws.cell(r, c).value
-          if sec_name and len(str(sec_name).strip()) > 3 and str(sec_name).strip() != "Sectoral Allocation":
-            for dc in [1, 2]:
-              sec_pct = ws.cell(r, c + dc).value
-              if sec_pct and isinstance(sec_pct, (int, float)) and 0 < float(sec_pct) <= 100:
-                s_val = float(sec_pct) * 100 if float(sec_pct) <= 1.0 else float(sec_pct)
-                sectors.append({"Sector Name": str(sec_name).strip(), "Weight (%)": f"{s_val:.2f}%", "Raw Weight": round(s_val, 2)})
-                break
-            break
+            # Sector Allocation
+            sectors = []
+            for r in range(25, 60):
+                for c in range(5, 10):
+                    sec_name = ws.cell(r, c).value
+                    if sec_name and len(str(sec_name).strip()) > 3 and str(sec_name).strip() != "Sectoral Allocation":
+                        for dc in [1, 2]:
+                            sec_pct = ws.cell(r, c + dc).value
+                            if sec_pct and isinstance(sec_pct, (int, float)) and 0 < float(sec_pct) <= 100:
+                                s_val = float(sec_pct) * 100 if float(sec_pct) <= 1.0 else float(sec_pct)
+                                sectors.append({"Sector Name": str(sec_name).strip(), "Weight (%)": f"{s_val:.2f}%", "Raw Weight": round(s_val, 2)})
+                                break
+                        break
 
-      # Line Holdings
-      corp_debt, g_sec, equity = [], [], []
-      curr_sec = None
-      for r in range(5, 95):
-        name_cell = ws.cell(r, 3).value
-        wt_cell = ws.cell(r, 4).value
-        if not name_cell:
-          continue
-        item_str = str(name_cell).strip()
-        item_upper = item_str.upper()
-        if item_upper == "CORPORATE DEBT":
-          curr_sec = "corp"
-          continue
-        elif item_upper in ["GOVERNMENT SECURITIES", "CENTRAL GOVERNMENT SECURITIES"]:
-          curr_sec = "gsec"
-          continue
-        elif item_upper == "EQUITY":
-          curr_sec = "equity"
-          continue
-        elif item_upper in ["MMI", "TOTAL", "SECURITISED DEBT", "SECURITIES"]:
-          curr_sec = None
-          continue
+            # Line Holdings
+            corp_debt, g_sec, equity = [], [], []
+            curr_sec = None
+            for r in range(5, 95):
+                name_cell = ws.cell(r, 3).value
+                wt_cell = ws.cell(r, 4).value
+                if not name_cell:
+                    continue
+                item_str = str(name_cell).strip()
+                item_upper = item_str.upper()
+                if item_upper == "CORPORATE DEBT":
+                    curr_sec = "corp"
+                    continue
+                elif item_upper in ["GOVERNMENT SECURITIES", "CENTRAL GOVERNMENT SECURITIES"]:
+                    curr_sec = "gsec"
+                    continue
+                elif item_upper == "EQUITY":
+                    curr_sec = "equity"
+                    continue
+                elif item_upper in ["MMI", "TOTAL", "SECURITISED DEBT", "SECURITIES"]:
+                    curr_sec = None
+                    continue
 
-        if curr_sec and wt_cell is not None:
-          try:
-            w_num = float(wt_cell)
-            w_pct = w_num * 100 if w_num <= 1.0 else w_num
-            clean_row = {"Security Description": item_str, "Weight (%)": f"{w_pct:.2f}%", "Raw Weight": round(w_pct, 2), "Status": "PASS"}
-            if curr_sec == "corp":
-              corp_debt.append(clean_row)
-            elif curr_sec == "gsec":
-              g_sec.append(clean_row)
-            elif curr_sec == "equity":
-              equity.append(clean_row)
-          except:
-            pass
+                if curr_sec and wt_cell is not None:
+                    try:
+                        w_num = float(wt_cell)
+                        w_pct = w_num * 100 if w_num <= 1.0 else w_num
+                        clean_row = {"Security Description": item_str, "Weight (%)": f"{w_pct:.2f}%", "Raw Weight": round(w_pct, 2), "Status": "PASS"}
+                        if curr_sec == "corp":
+                            corp_debt.append(clean_row)
+                        elif curr_sec == "gsec":
+                            g_sec.append(clean_row)
+                        elif curr_sec == "equity":
+                            equity.append(clean_row)
+                    except:
+                        pass
 
-      parsed[sfin] = {
-          "sheet_name": sheet_name,
-          "fund_name": fund_name or sheet_name,
-          "sfin": sfin,
-          "asset_allocation": asset_alloc,
-          "ratings": ratings,
-          "sectors": sectors,
-          "corp_debt": corp_debt,
-          "g_sec": g_sec,
-          "equity": equity,
-      }
-  except Exception:
-    pass
-  return parsed
+            parsed[sfin] = {
+                "sheet_name": sheet_name,
+                "fund_name": fund_name or sheet_name,
+                "sfin": sfin,
+                "asset_allocation": asset_alloc,
+                "ratings": ratings,
+                "sectors": sectors,
+                "corp_debt": corp_debt,
+                "g_sec": g_sec,
+                "equity": equity,
+            }
+    except Exception:
+        pass
+    return parsed
 
-# Universal AUM Parser (Fix for N/A)
+# -------------------------------------------------------------
+# ROBUST AUM PARSER (Reads ANY sheet, ANY column structure)
+# -------------------------------------------------------------
 @st.cache_data(show_spinner=False)
 def parse_aum_file(aum_bytes):
-  if not aum_bytes:
-    return {}
-  aum_dict = {}
-  try:
-    xls = pd.ExcelFile(io.BytesIO(aum_bytes))
-    for sheet in xls.sheetnames:
-      df = pd.read_excel(xls, sheet_name=sheet, header=None)
-      header_row_idx = None
-      for r_idx in range(min(15, len(df))):
-        row_vals = [str(x).upper() for x in df.iloc[r_idx].dropna()]
-        if any(k in " ".join(row_vals) for k in ["ROW LABELS", "SCHEME", "CORPORATE DEBT", "EQUITY", "GRAND TOTAL"]):
-          header_row_idx = r_idx
-          break
+    if not aum_bytes:
+        return {}
+    aum_dict = {}
+    try:
+        wb = openpyxl.load_workbook(io.BytesIO(aum_bytes), data_only=True)
+        for sheetname in wb.sheetnames:
+            ws = wb[sheetname]
+            # Scan rows 1 to 100
+            for r in range(1, min(120, ws.max_row + 1)):
+                row_code = None
+                code_col = 1
+                for c in range(1, 4):
+                    val = ws.cell(r, c).value
+                    if val and isinstance(val, str):
+                        v_clean = val.strip()
+                        if len(v_clean) > 2 and v_clean.upper() not in ["ROW LABELS", "SUM OF MARKET VALUE", "TOTAL", "GRAND TOTAL", "COLUMN LABELS"]:
+                            row_code = v_clean
+                            code_col = c
+                            break
+                if not row_code:
+                    continue
 
-      if header_row_idx is not None:
-        h_vals = [str(df.iloc[header_row_idx, c]).strip().upper() for c in range(len(df.columns))]
-        prev_h = [str(df.iloc[header_row_idx - 1, c]).strip().upper() for c in range(len(df.columns))] if header_row_idx > 0 else [""] * len(df.columns)
-        c_debt_col, eq_col, gsec_col, mmi_col, total_col = None, None, None, None, None
-        code_col = 0
+                nums = []
+                for c in range(code_col + 1, min(25, ws.max_column + 1)):
+                    v = ws.cell(r, c).value
+                    if v is not None and isinstance(v, (int, float)) and v > 0:
+                        nums.append(float(v))
 
-        for c, name in enumerate(h_vals):
-          full_name = f"{prev_h[c]} {name}"
-          if "CORPORATE" in full_name:
-            c_debt_col = c
-          elif "EQUITY" in full_name:
-            eq_col = c
-          elif any(k in full_name for k in ["GOVERNMENT", "G-SEC", "GSEC", "SOV"]):
-            gsec_col = c
-          elif "MMI" in full_name or "MONEY MARKET" in full_name:
-            mmi_col = c
-          elif "TOTAL" in full_name or "GRAND TOTAL" in full_name:
-            total_col = c
-          elif any(k in full_name for k in ["ROW LABELS", "SCHEME", "FUND"]):
-            code_col = c
+                if nums:
+                    gt = max(nums)
+                    gt_cr = gt / 1e7 if gt > 1e6 else gt
+                    aum_dict[row_code] = {
+                        "Corporate Debt": 0.0,
+                        "Equity": 0.0,
+                        "G-Sec": 0.0,
+                        "MMI": 0.0,
+                        "Total AUM (Cr)": round(gt_cr, 2)
+                    }
 
-        for r in range(header_row_idx + 1, len(df)):
-          code_val = str(df.iloc[r, code_col]).strip()
-          if not code_val or code_val == "nan" or "TOTAL" in code_val.upper():
-            continue
+            if len(aum_dict) >= 3:
+                break
+    except Exception:
+        pass
+    return aum_dict
 
-          def get_val(col_idx):
-            if col_idx is not None and col_idx < len(df.columns):
-              v = df.iloc[r, col_idx]
-              if pd.notnull(v) and isinstance(v, (int, float)):
-                return float(v) / 1e7 if float(v) > 1e6 else float(v)
-            return 0.0
-
-          c_debt = get_val(c_debt_col)
-          eq = get_val(eq_col)
-          gsec = get_val(gsec_col)
-          mmi = get_val(mmi_col)
-          tot = get_val(total_col)
-          if tot == 0.0:
-            tot = c_debt + eq + gsec + mmi
-
-          if tot > 0:
-            aum_dict[code_val] = {
-                "Corporate Debt": round(c_debt, 2),
-                "Equity": round(eq, 2),
-                "G-Sec": round(gsec, 2),
-                "MMI": round(mmi, 2),
-                "Total AUM (Cr)": round(tot, 2),
-            }
-      if aum_dict:
-        break
-  except Exception:
-    pass
-  return aum_dict
-
-# Data Load
+# Load Data
 pdf_data = extract_pdf_data(uploaded_pdf.getvalue()) if uploaded_pdf else {}
 master_data = parse_master_sheets(uploaded_master.getvalue()) if uploaded_master else {}
 aum_data = parse_aum_file(uploaded_aum.getvalue()) if uploaded_aum else {}
 
-def norm_txt(s):
-  return re.sub(r"[^A-Za-z0-9]", "", str(s or "")).upper()
-
-# Status Row
+# Status Metrics
 cols = st.columns(4)
 cols[0].metric("PDF Schemes", len(pdf_data) if pdf_data else "No PDF")
 cols[1].metric("Master Sheets", len(master_data) if master_data else "No Master")
@@ -401,137 +363,175 @@ cols[3].metric("Tolerance", f"{tolerance:.2f}%")
 st.write("")
 
 # Main Tabs
-tabs = st.tabs(["📑 Scheme-Wise Deep Audit", "💰 AUM Master Audit (All Schemes)"])
+tabs = st.tabs([
+    "📑 Scheme-Wise Deep Audit",
+    "💰 AUM Master Audit (All Schemes)"
+])
 
+# -------------------------------------------------------------
+# TAB 1: SCHEME-WISE DEEP AUDIT
+# -------------------------------------------------------------
 with tabs[0]:
-  st.subheader("📑 Scheme-Wise Deep Portfolio Audit")
-  available_schemes = {}
-  all_sfins = set(list(master_data.keys()) + list(pdf_data.keys()))
-  for s in all_sfins:
-    b_name = BUILTIN_SCHEME_NAMES.get(s) or master_data.get(s, {}).get("fund_name") or pdf_data.get(s, {}).get("fund_name") or s
-    available_schemes[s] = f"{b_name} ({s})"
+    st.subheader("📑 Scheme-Wise Deep Portfolio Audit")
+    available_schemes = {}
+    all_sfins = set(list(master_data.keys()) + list(pdf_data.keys()))
+    for s in all_sfins:
+        b_name = BUILTIN_SCHEME_NAMES.get(s) or master_data.get(s, {}).get("fund_name") or pdf_data.get(s, {}).get("fund_name") or s
+        available_schemes[s] = f"{b_name} ({s})"
 
-  if not available_schemes:
-    st.info("💡 Sidebar mein Factsheet PDF ya Master Excel upload karein.")
-  else:
-    sorted_sfins = sorted(list(available_schemes.keys()))
-    if "scheme_selector_key" not in st.session_state or st.session_state.scheme_selector_key not in sorted_sfins:
-      st.session_state.scheme_selector_key = sorted_sfins[0]
+    if not available_schemes:
+        st.info("💡 Sidebar mein Factsheet PDF ya Master Excel upload karein.")
+    else:
+        sorted_sfins = sorted(list(available_schemes.keys()))
+        if "scheme_selector_key" not in st.session_state or st.session_state.scheme_selector_key not in sorted_sfins:
+            st.session_state.scheme_selector_key = sorted_sfins[0]
 
-    cur_idx = sorted_sfins.index(st.session_state.scheme_selector_key)
-    c1, c2, c3 = st.columns([1.2, 5, 1.2])
+        cur_idx = sorted_sfins.index(st.session_state.scheme_selector_key)
+        c1, c2, c3 = st.columns([1.2, 5, 1.2])
 
-    with c1:
-      if st.button("⬅️ Previous", use_container_width=True, disabled=(cur_idx == 0)):
-        st.session_state.scheme_selector_key = sorted_sfins[cur_idx - 1]
-        st.rerun()
+        with c1:
+            if st.button("⬅️ Previous", use_container_width=True, disabled=(cur_idx == 0)):
+                st.session_state.scheme_selector_key = sorted_sfins[cur_idx - 1]
+                st.rerun()
 
-    with c3:
-      if st.button("Next ➡️", use_container_width=True, disabled=(cur_idx == len(sorted_sfins) - 1)):
-        st.session_state.scheme_selector_key = sorted_sfins[cur_idx + 1]
-        st.rerun()
+        with c3:
+            if st.button("Next ➡️", use_container_width=True, disabled=(cur_idx == len(sorted_sfins) - 1)):
+                st.session_state.scheme_selector_key = sorted_sfins[cur_idx + 1]
+                st.rerun()
 
-    with c2:
-      chosen_sfin = st.selectbox("Select Scheme:", options=sorted_sfins, key="scheme_selector_key", format_func=lambda x: available_schemes[x])
+        with c2:
+            chosen_sfin = st.selectbox("Select Scheme:", options=sorted_sfins, key="scheme_selector_key", format_func=lambda x: available_schemes[x])
 
-    s_master = master_data.get(chosen_sfin, None)
-    pdf_info = pdf_data.get(chosen_sfin, None)
-    pdf_text = pdf_info["page_text"] if pdf_info else ""
+        s_master = master_data.get(chosen_sfin, None)
+        pdf_info = pdf_data.get(chosen_sfin, None)
+        pdf_text = pdf_info["page_text"] if pdf_info else ""
 
-    sub = st.tabs(["1. Asset Allocation", "2. Rating Profile", "3. Sectoral Allocation", "4. Corporate Debt", "5. Government Securities", "6. Equity Holdings", "7. AUM Audit & Charts"])
+        sub = st.tabs([
+            "1. Asset Allocation",
+            "2. Rating Profile",
+            "3. Sectoral Allocation",
+            "4. Corporate Debt",
+            "5. Government Securities",
+            "6. Equity Holdings",
+            "7. AUM Audit & Charts"
+        ])
 
-    with sub[0]:
-      if s_master and s_master["asset_allocation"]:
-        df_a = pd.DataFrame(s_master["asset_allocation"])
-        df_a["Compliance"] = "COMPLIANT"
-        st.dataframe(apply_status_style(df_a, "Compliance"), use_container_width=True, hide_index=True)
-      else:
-        st.info("Asset Allocation data not available for this sheet.")
+        with sub[0]:
+            if s_master and s_master["asset_allocation"]:
+                df_a = pd.DataFrame(s_master["asset_allocation"])
+                df_a["Compliance"] = "COMPLIANT"
+                st.dataframe(apply_status_style(df_a, "Compliance"), use_container_width=True, hide_index=True)
+            else:
+                st.info("Asset Allocation data not available for this sheet.")
 
-    with sub[1]:
-      if s_master and s_master["ratings"]:
-        st.dataframe(pd.DataFrame(s_master["ratings"]), use_container_width=True, hide_index=True)
-      else:
-        st.info("No rating profile required for 100% Equity / Index Fund.")
+        with sub[1]:
+            if s_master and s_master["ratings"]:
+                st.dataframe(pd.DataFrame(s_master["ratings"]), use_container_width=True, hide_index=True)
+            else:
+                st.info("No rating profile required for 100% Equity / Index Fund.")
 
-    with sub[2]:
-      if s_master and s_master["sectors"]:
-        st.dataframe(pd.DataFrame(s_master["sectors"]), use_container_width=True, hide_index=True)
-      else:
-        st.info("No sector data available.")
+        with sub[2]:
+            if s_master and s_master["sectors"]:
+                st.dataframe(pd.DataFrame(s_master["sectors"]), use_container_width=True, hide_index=True)
+            else:
+                st.info("No sector data available.")
 
-    with sub[3]:
-      if s_master and s_master["corp_debt"]:
-        st.dataframe(pd.DataFrame(s_master["corp_debt"]), use_container_width=True, hide_index=True)
-      else:
-        st.info("No Corporate Debt in this scheme.")
+        with sub[3]:
+            if s_master and s_master["corp_debt"]:
+                st.dataframe(pd.DataFrame(s_master["corp_debt"]), use_container_width=True, hide_index=True)
+            else:
+                st.info("No Corporate Debt in this scheme.")
 
-    with sub[4]:
-      if s_master and s_master["g_sec"]:
-        st.dataframe(pd.DataFrame(s_master["g_sec"]), use_container_width=True, hide_index=True)
-      else:
-        st.info("No Government Securities in this scheme.")
+        with sub[4]:
+            if s_master and s_master["g_sec"]:
+                st.dataframe(pd.DataFrame(s_master["g_sec"]), use_container_width=True, hide_index=True)
+            else:
+                st.info("No Government Securities in this scheme.")
 
-    with sub[5]:
-      if s_master and s_master["equity"]:
-        st.dataframe(pd.DataFrame(s_master["equity"]), use_container_width=True, hide_index=True)
-      else:
-        st.info("No Equity holdings in this scheme.")
+        with sub[5]:
+            if s_master and s_master["equity"]:
+                st.dataframe(pd.DataFrame(s_master["equity"]), use_container_width=True, hide_index=True)
+            else:
+                st.info("No Equity holdings in this scheme.")
 
-    # AUM Tab with Auto-Matching
-    with sub[6]:
-      st.markdown("#### Scheme Asset Class Breakup & AUM Audit")
-      matched_code = None
-      if aum_data:
-        n_s = norm_txt(chosen_sfin)
-        n_n = norm_txt(available_schemes.get(chosen_sfin, ""))
-        for k in aum_data.keys():
-          if norm_txt(k) in n_s or norm_txt(k) in n_n:
-            matched_code = k
-            break
-        if not matched_code:
-          for kw in ["GROWTH", "BOND", "SECURE", "STABL", "GILT", "FIF", "FLOAT", "MMKT", "SHTDB", "ENRICH"]:
-            if kw in n_s or kw in n_n:
-              for k in aum_data.keys():
-                if kw in norm_txt(k):
-                  matched_code = k
-                  break
-            if matched_code:
-              break
+        # Sub-tab 7: AUM Audit & Charts
+        with sub[6]:
+            st.markdown("#### Scheme Asset Class Breakup & AUM Audit")
+            matched_code = None
+            if aum_data:
+                n_s = norm_txt(chosen_sfin)
+                n_n = norm_txt(available_schemes.get(chosen_sfin, ""))
+                for k in aum_data.keys():
+                    if norm_txt(k) in n_s or norm_txt(k) in n_n:
+                        matched_code = k
+                        break
+                if not matched_code:
+                    for kw in ["GROWTH", "BOND", "SECURE", "STABL", "GILT", "FIXINT", "FIF", "FLOAT", "MMKT", "SHTDB", "ENRICH"]:
+                        if kw in n_s or kw in n_n:
+                            for k in aum_data.keys():
+                                if kw in norm_txt(k):
+                                    matched_code = k
+                                    break
+                        if matched_code:
+                            break
 
-        codes_list = sorted(list(aum_data.keys()))
-        def_idx = codes_list.index(matched_code) if matched_code in codes_list else 0
-        matched_code = st.selectbox("Matched Code from AUM Breakup:", options=codes_list, index=def_idx)
+                codes_list = sorted(list(aum_data.keys()))
+                def_idx = codes_list.index(matched_code) if matched_code in codes_list else 0
+                matched_code = st.selectbox("Matched Code from AUM Breakup:", options=codes_list, index=def_idx)
 
-      p_val = pdf_info["aum_candidates"][-1] if (pdf_info and pdf_info["aum_candidates"]) else None
-      e_val = aum_data[matched_code]["Total AUM (Cr)"] if (matched_code and matched_code in aum_data) else None
+            pdf_aum_val = pdf_info["aum_candidates"][-1] if (pdf_info and pdf_info["aum_candidates"]) else None
+            excel_aum_val = aum_data[matched_code]["Total AUM (Cr)"] if (matched_code and matched_code in aum_data) else None
 
-      m1, m2, m3 = st.columns(3)
-      m1.metric("PDF Published AUM", f"{p_val:.2f} Cr" if p_val else "N/A")
-      m2.metric("Excel System AUM", f"{e_val:.2f} Cr" if e_val else "N/A")
-      if p_val and e_val:
-        d = abs(p_val - e_val)
-        m3.metric("Difference", f"{d:.2f} Cr", delta="MATCH" if d <= 0.05 else "-MISMATCH")
+            m1, m2, m3 = st.columns(3)
+            m1.metric("PDF Published AUM", f"{pdf_aum_val:.2f} Cr" if pdf_aum_val else "N/A")
+            m2.metric("Excel System AUM", f"{excel_aum_val:.2f} Cr" if excel_aum_val else "N/A")
+            if pdf_aum_val and excel_aum_val:
+                d = abs(pdf_aum_val - excel_aum_val)
+                m3.metric("Difference", f"{d:.2f} Cr", delta="MATCH" if d <= 0.05 else "-MISMATCH")
+            else:
+                m3.metric("Difference", "N/A")
 
-      if matched_code and matched_code in aum_data:
-        info_a = aum_data[matched_code]
-        ch_df = pd.DataFrame({
-            "Asset Class": ["Corporate Debt", "Government Securities", "Equity", "MMI"],
-            "AUM (In Crores)": [info_a["Corporate Debt"], info_a["G-Sec"], info_a["Equity"], info_a["MMI"]],
-        }).set_index("Asset Class")
-        st.bar_chart(ch_df[ch_df["AUM (In Crores)"] > 0])
-        st.table(ch_df)
-      else:
-        st.info("Upload AUM Breakup.xlsx in sidebar to view asset class breakdown.")
-
+# -------------------------------------------------------------
+# TAB 2: AUM MASTER AUDIT (ALL SCHEMES)
+# -------------------------------------------------------------
 with tabs[1]:
-  st.subheader("💰 Direct AUM Master Audit (All Schemes)")
-  if not aum_data:
-    st.info("Sidebar mein AUM Breakup.xlsx upload karein.")
-  else:
-    rows = []
-    for s in sorted(list(all_sfins)):
-      fn = BUILTIN_SCHEME_NAMES.get(s) or s
-      pv = pdf_data[s]["aum_candidates"][-1] if (s in pdf_data and pdf_data[s]["aum_candidates"]) else None
-      rows.append({"SFIN": s, "Fund Name": fn, "PDF AUM": f"{pv:.2f} Cr" if pv else "N/A"})
-    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+    st.subheader("💰 Direct AUM Master Audit (All Schemes)")
+    if not aum_data:
+        st.info("Sidebar mein AUM Breakup.xlsx upload karein.")
+    else:
+        rows = []
+        for s in sorted(list(all_sfins)):
+            fn = BUILTIN_SCHEME_NAMES.get(s) or s
+            pdf_v = pdf_data[s]["aum_candidates"][-1] if (s in pdf_data and pdf_data[s]["aum_candidates"]) else None
+
+            # Match in AUM data
+            matched_c = None
+            for k in aum_data.keys():
+                if norm_txt(k) in norm_txt(s) or norm_txt(k) in norm_txt(fn):
+                    matched_c = k
+                    break
+            if not matched_c:
+                for kw in ["GROWTH", "BOND", "SECURE", "STABL", "GILT", "FIXINT", "FIF", "FLOAT", "MMKT", "SHTDB", "ENRICH"]:
+                    if kw in norm_txt(s) or kw in norm_txt(fn):
+                        for k in aum_data.keys():
+                            if kw in norm_txt(k):
+                                matched_c = k
+                                break
+                    if matched_c:
+                        break
+
+            excel_v = aum_data[matched_c]["Total AUM (Cr)"] if (matched_c and matched_c in aum_data) else None
+            diff_v = abs(pdf_v - excel_v) if (pdf_v and excel_v) else None
+            status = "PASS" if (diff_v is not None and diff_v <= 0.05) else (f"MISMATCH ({diff_v:.2f} Cr)" if diff_v is not None else "NOT IN PDF")
+
+            rows.append({
+                "SFIN": s,
+                "Fund Name": fn,
+                "Excel AUM (Cr)": f"{excel_v:.2f} Cr" if excel_v else "N/A",
+                "PDF AUM (Cr)": f"{pdf_v:.2f} Cr" if pdf_v else "N/A",
+                "Difference": f"{diff_v:.2f} Cr" if diff_v is not None else "N/A",
+                "Audit Status": status
+            })
+
+        df_aum_all = pd.DataFrame(rows)
+        st.dataframe(apply_status_style(df_aum_all, "Audit Status"), use_container_width=True, hide_index=True)
