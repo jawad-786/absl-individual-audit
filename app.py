@@ -907,40 +907,38 @@ with tabs[2]:
 
             if aum_data:
                 aum_codes = sorted(list(aum_data.keys()))
-                default_idx = aum_codes.index(found_code) if (found_code and found_code in aum_codes) else 0
-                
-                selected_aum_code = st.selectbox(
+                # Add safe placeholder so it never forces index 0 (ABSLIESG)
+                dropdown_options = ["-- Select AUM Code --"] + aum_codes
+                default_idx = dropdown_options.index(found_code) if (found_code and found_code in dropdown_options) else 0
+
+                selected_option = st.selectbox(
                     "Matched AUM Code (From AUM Excel):",
-                    options=aum_codes,
+                    options=dropdown_options,
                     index=default_idx,
-                    format_func=lambda c: f"{c}  |  {aum_data[c]['Name']}  ({aum_data[c]['Total AUM (Cr)']} Cr)" if aum_data[c]['Name'] else f"{c}  ({aum_data[c]['Total AUM (Cr)']} Cr)",
+                    format_func=lambda c: (
+                        f"{c}  |  {aum_data[c]['Name']}  ({aum_data[c]['Total AUM (Cr)']} Cr)" 
+                        if (c in aum_data and aum_data[c]['Name']) 
+                        else f"{c}  ({aum_data[c]['Total AUM (Cr)']} Cr)" if c in aum_data 
+                        else c
+                    ),
                     help="Auto-matched from AUM file. You can change manually if needed."
                 )
-                found_code = selected_aum_code
-                excel_aum_val = aum_data[found_code]["Total AUM (Cr)"]
+
+                if selected_option != "-- Select AUM Code --":
+                    found_code = selected_option
+                    excel_aum_val = aum_data[found_code]["Total AUM (Cr)"]
+                else:
+                    found_code = None
+                    excel_aum_val = None
 
             pdf_aum_val = pdf_info["aum_candidates"][-1] if (pdf_info and pdf_info["aum_candidates"]) else None
 
             m_c1, m_c2, m_c3 = st.columns(3)
-            m_c1.metric("PDF Published AUM", f"{pdf_aum_val:.2f} Cr" if pdf_aum_val else "N/A")
+            m_c1.metric("PDF Published AUM", f"{pdf_aum_val:.2f} Cr" if pdf_aum_val is not None else "N/A")
             m_c2.metric("Excel System AUM", f"{excel_aum_val:.2f} Cr" if excel_aum_val is not None else "N/A")
-            if pdf_aum_val and excel_aum_val is not None:
+            if pdf_aum_val is not None and excel_aum_val is not None:
                 diff_aum = abs(pdf_aum_val - excel_aum_val)
                 m_c3.metric("Difference", f"{diff_aum:.2f} Cr", delta="MATCH" if diff_aum <= 0.05 else "-MISMATCH")
-
-            if found_code and found_code in aum_data:
-                info_a = aum_data[found_code]
-                chart_df = pd.DataFrame({
-                    "Asset Class": ["Corporate Debt", "Government Securities", "Equity", "MMI"],
-                    "AUM (In Crores)": [info_a["Corporate Debt"], info_a["G-Sec"], info_a["Equity"], info_a["MMI"]],
-                }).set_index("Asset Class")
-
-                chart_df_non_zero = chart_df[chart_df["AUM (In Crores)"] > 0]
-                if not chart_df_non_zero.empty:
-                    st.bar_chart(chart_df_non_zero)
-                    st.table(chart_df)
-            else:
-                st.info("Upload `AUM with Fund names.xlsx` in sidebar to view asset class breakdown.")
 
 # -------------------------------------------------------------
 # TAB 4: AUM ASSET BREAKUP (RAW CODES)
