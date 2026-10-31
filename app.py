@@ -547,7 +547,7 @@ def parse_aum_file(aum_bytes):
     wb = openpyxl.load_workbook(io.BytesIO(aum_bytes), data_only=True)
     for sheetname in wb.sheetnames:
       ws = wb[sheetname]
-      for r in range(1, min(120, ws.max_row + 1)):
+      for r in range(1, min(150, ws.max_row + 1)):
         row_code = None
         code_col = 1
         for c in range(1, 4):
@@ -571,21 +571,27 @@ def parse_aum_file(aum_bytes):
         if not row_code:
           continue
 
-        nums = []
+        # Look for the exact Crores column (values typically between 1 and 50000)
+        exact_cr_val = None
         for c in range(code_col + 1, min(25, ws.max_column + 1)):
           v = ws.cell(r, c).value
-          if v is not None and isinstance(v, (int, float)) and v > 0:
-            nums.append(float(v))
+          if v is not None and isinstance(v, (int, float)):
+            # If value is already in Crores format (e.g., 786.22, 1760.34, 10451.88)
+            if 0.1 <= float(v) <= 100000:
+              exact_cr_val = float(v)
+              break
+            # If value is in raw rupees (> 10 Lakhs)
+            elif float(v) > 1000000:
+              exact_cr_val = float(v) / 1e7
+              break
 
-        if nums:
-          gt = max(nums)
-          gt_cr = gt / 1e7 if gt > 1e6 else gt
+        if exact_cr_val is not None:
           aum_dict[row_code] = {
               "Corporate Debt": 0.0,
               "Equity": 0.0,
               "G-Sec": 0.0,
               "MMI": 0.0,
-              "Total AUM (Cr)": round(gt_cr, 2),
+              "Total AUM (Cr)": round(exact_cr_val, 2),
           }
 
       if len(aum_dict) >= 3:
