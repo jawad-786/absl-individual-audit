@@ -102,6 +102,7 @@ BUILTIN_SCHEME_NAMES = {
     "ULIF01911/12/09BSLITITAN1109": "Titanium 1 Fund",
     "ULIF02011/12/09BSLITITAN2109": "Titanium 2 Fund",
     "ULIF02203/02/10BSLPLATPR1109": "Platinum Premier Fund",
+    "ULIF02301/07/10BSLIDISCPF109": "Discontinued Policy Fund",
     "ULIF02408/09/10BSLPLATADV109": "Platinum Advantage Fund",
     "ULIF02707/10/11BSLIPUREEQ109": "Individual Pure Equity Fund",
     "ULIF02807/10/11BSLLIQPLUS109": "Individual Liquid Plus Fund",
@@ -409,7 +410,6 @@ def parse_aum_file(aum_bytes):
             if code_val and code_val not in ["Row Labels", "nan", "Grand Total"]:
                 try:
                     cr_num = float(v_cr) if v_cr is not None else 0.0
-                    # Handle small scientific notation as 0.00
                     if abs(cr_num) < 0.001:
                         cr_num = 0.0
                     aum_dict[code_val] = {
@@ -509,30 +509,29 @@ EXHAUSTIVE_SFIN_MAP = {
     "ULIF01217/10/07BSLINMULTI109": "IND-MULTI",
     "ULIF01507/08/08BSLIINCADV109": "INC-ADV-FUND",
     "ULIF01723/06/09BSLSUPER20109": "SUPER20",
-    "ULIF01911/12/09BSLITITAN1109": "TITANIUM",      # Titanium 1
-    "ULIF02011/12/09BSLITITAN2109": "TITANIUM2",     # Titanium 2
+    "ULIF01911/12/09BSLITITAN1109": "TITANIUM",
+    "ULIF02011/12/09BSLITITAN2109": "TITANIUM2",
     "ULIF02203/02/10BSLPLATPR1109": "PLATINUM-PR1",
-    "ULIF02301/07/10BSLIDISCPF109": "BSLI-DISCF",    # Discontinued Policy Fund (Fixed)
+    "ULIF02301/07/10BSLIDISCPF109": "BSLI-DISCF",
     "ULIF02408/09/10BSLPLATADV109": "PLATINUMADV",
     "ULIF02707/10/11BSLIPUREEQ109": "BSLIPUREEQ",
     "ULIF02807/10/11BSLLIQPLUS109": "BSLLIQPLUS",
     "ULIF02907/10/11BSLIVALUEM109": "BSLIVALUEM",
     "ULIF03027/08/13BSLIMAXGT109": "BSLIMAXGUA",
     "ULIF03127/08/13BSLIINADGT109": "BSLIINADGU",
-    "ULIF03205/07/13BSLILDIS109": "BSLIDISLIF",      # Linked Discontinued Policy Fund
-    "ULIF03305/07/13BSLIPNDIS109": "BSLIDISPEN",      # Pension Discontinued Policy Fund
+    "ULIF03205/07/13BSLILDIS109": "BSLIDISLIF",
+    "ULIF03305/07/13BSLIPNDIS109": "BSLIDISPEN",
     "ULIF03430/10/14BSLIASTALC109": "BSLIASTALC",
     "ULIF03530/10/14BSLICNFIDX109": "BSLICNFIDX",
     "ULIF03722/06/18ABSLIMUMNC109": "MNC",
-    "ULIF03810/11/23ABSLESGFND109": "ABSLIESG",       # ESG Fund (Only matches ESG SFIN)
+    "ULIF03810/11/23ABSLESGFND109": "ABSLIESG",
     "ULIF03910/11/23ABSLSMALCP109": "SMALLCAP",
-    "ULIF04015/06/24ABSLIALPHA109": "INDALPHA50",    # Nifty 50 Alpha
+    "ULIF04015/06/24ABSLIALPHA109": "INDALPHA50",
     "ULIF04101/10/24ABSLMOMNTM109": "INDMOMNTM",
     "ULIF04206/11/25ABSLDIVYLD109": "INDDIVYIELD",
     "ULIF04312/02/26ABSLFLXCAP109": "INDFLEXICAP",
     "ULIF04410/09/26ABSLPENMAX109": "ABSLPENMAX",
     "ULIF04510/09/26ABSLPENINA109": "ABSLPENINA",
-}
 }
 
 def get_exact_aum_for_sfin(sfin, fund_name, aum_data):
@@ -907,7 +906,6 @@ with tabs[2]:
 
             if aum_data:
                 aum_codes = sorted(list(aum_data.keys()))
-                # Add safe placeholder so it never forces index 0 (ABSLIESG)
                 dropdown_options = ["-- Select AUM Code --"] + aum_codes
                 default_idx = dropdown_options.index(found_code) if (found_code and found_code in dropdown_options) else 0
 
@@ -934,11 +932,25 @@ with tabs[2]:
             pdf_aum_val = pdf_info["aum_candidates"][-1] if (pdf_info and pdf_info["aum_candidates"]) else None
 
             m_c1, m_c2, m_c3 = st.columns(3)
-            m_c1.metric("PDF Published AUM", f"{pdf_aum_val:.2f} Cr" if pdf_aum_val is not None else "N/A")
+            m_c1.metric("PDF Published AUM", f"{pdf_aum_val:.2f} Cr" if pdf_aum_val else "N/A")
             m_c2.metric("Excel System AUM", f"{excel_aum_val:.2f} Cr" if excel_aum_val is not None else "N/A")
-            if pdf_aum_val is not None and excel_aum_val is not None:
+            if pdf_aum_val and excel_aum_val is not None:
                 diff_aum = abs(pdf_aum_val - excel_aum_val)
                 m_c3.metric("Difference", f"{diff_aum:.2f} Cr", delta="MATCH" if diff_aum <= 0.05 else "-MISMATCH")
+
+            if found_code and found_code in aum_data:
+                info_a = aum_data[found_code]
+                chart_df = pd.DataFrame({
+                    "Asset Class": ["Corporate Debt", "Government Securities", "Equity", "MMI"],
+                    "AUM (In Crores)": [info_a["Corporate Debt"], info_a["G-Sec"], info_a["Equity"], info_a["MMI"]],
+                }).set_index("Asset Class")
+
+                chart_df_non_zero = chart_df[chart_df["AUM (In Crores)"] > 0]
+                if not chart_df_non_zero.empty:
+                    st.bar_chart(chart_df_non_zero)
+                    st.table(chart_df)
+            else:
+                st.info("Upload `AUM with Fund names.xlsx` in sidebar to view asset class breakdown.")
 
 # -------------------------------------------------------------
 # TAB 4: AUM ASSET BREAKUP (RAW CODES)
