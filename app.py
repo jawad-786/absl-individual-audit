@@ -60,14 +60,14 @@ st.markdown(
     """
     <div class="main-header">
         <h1>🛡️ ABSLI Fund Factsheet Audit Engine</h1>
-        <p>Comprehensive Factsheet Audit: Corporate Debt, G-Sec, Equity, Asset Allocation, Ratings, Sectors & AUM Charts</p>
+        <p>Comprehensive Factsheet Audit: NAV, AUM, Corporate Debt, G-Sec, Equity, Asset Allocation, Ratings & Sectors</p>
     </div>
 """,
     unsafe_allow_html=True,
 )
 
 # -------------------------------------------------------------
-# BUILT-IN SCHEME DIRECTORY (Never shows generic "PDF Scheme")
+# BUILT-IN SCHEME DIRECTORY
 # -------------------------------------------------------------
 BUILTIN_SCHEME_NAMES = {
     "ULGF00112/06/01BSLGGROWTH109": "Group Growth Fund",
@@ -643,11 +643,12 @@ status_cols[5].metric("Tolerance", f"{tolerance:.2f}%")
 
 st.write("")
 
-# Main Tabs
+# Main Tabs (AUM Master Audit Tab Included as Tab 2)
 tabs = st.tabs([
     "📈 NAV Master Audit (All Schemes)",
+    "💰 AUM Master Audit (All Schemes)",
     "📑 Scheme-Wise Deep Audit",
-    "💰 AUM Breakup Audit",
+    "📊 AUM Asset Breakup",
     "📉 YTM & Duration Audit",
     "📥 Export Full Audit Workbook",
 ])
@@ -664,9 +665,10 @@ with tabs[0]:
     )
   else:
     cat_filter = st.radio(
-        "Filter Schemes:",
+        "Filter Schemes (NAV):",
         ["All Schemes", "Individual Funds (ULIF)", "Group Funds (ULGF)"],
         horizontal=True,
+        key="nav_cat_filter",
     )
 
     nav_rows = []
@@ -720,9 +722,91 @@ with tabs[0]:
     st.dataframe(styled_nav_audit, use_container_width=True, hide_index=True)
 
 # -------------------------------------------------------------
-# TAB 2: SCHEME-WISE DEEP AUDIT (WITH WORKING PREV & NEXT NAVIGATION)
+# TAB 2: AUM MASTER AUDIT (PDF vs Excel Cross Check - ALL SCHEMES)
 # -------------------------------------------------------------
 with tabs[1]:
+  st.subheader("💰 Direct AUM Master Audit (All Schemes in Crores)")
+  if not aum_data and not pdf_data:
+    st.info(
+        "💡 Sidebar mein **`AUM Breakup.xlsx`** aur **Factsheet PDF** upload"
+        " karein AUM audit ke liye."
+    )
+  else:
+    aum_audit_rows = []
+    # Collect all available schemes from PDF or NAV or Master
+    all_aum_sfins = set(list(pdf_data.keys()) + list(nav_data.keys()))
+
+    for sfin in sorted(list(all_aum_sfins)):
+      fname = (
+          nav_data.get(sfin, {}).get("name")
+          or BUILTIN_SCHEME_NAMES.get(sfin)
+          or pdf_data.get(sfin, {}).get("fund_name")
+          or sfin
+      )
+      ftype = (
+          "Individual (ULIF)" if sfin.startswith("ULIF") else "Group (ULGF)"
+      )
+
+      # Extract PDF AUM
+      pdf_aum_val = None
+      p_info = pdf_data.get(sfin)
+      if p_info and p_info["aum_candidates"]:
+        pdf_aum_val = p_info["aum_candidates"][-1]
+
+      # Extract Excel AUM from AUM Breakup
+      excel_aum_val = None
+      sheet_name_cand = master_data.get(sfin, {}).get("sheet_name", "")
+
+      # Try matching by sfin, sheet name, or fund name abbreviation
+      for code_key, a_info in aum_data.items():
+        if (
+            code_key.upper() in sfin.upper()
+            or (sheet_name_cand and code_key.upper() in sheet_name_cand.upper())
+            or code_key.upper() in fname.upper()
+        ):
+          excel_aum_val = a_info["Total AUM (Cr)"]
+          break
+
+      status = "PENDING PDF"
+      diff = 0.0
+      if not uploaded_pdf:
+        status = "PENDING PDF"
+      elif pdf_aum_val is not None and excel_aum_val is not None:
+        diff = abs(pdf_aum_val - excel_aum_val)
+        status = "PASS" if diff <= 0.05 else f"MISMATCH ({diff:.2f} Cr)"
+      elif pdf_aum_val is not None and excel_aum_val is None:
+        status = "PENDING EXCEL"
+      elif sfin not in pdf_data:
+        status = "NOT IN PDF"
+      else:
+        status = "NOT IN PDF"
+
+      aum_audit_rows.append({
+          "Category": ftype,
+          "SFIN Code": sfin,
+          "Fund Name": fname,
+          "Excel AUM (Cr)": (
+              f"{excel_aum_val:.2f} Cr" if excel_aum_val is not None else "N/A"
+          ),
+          "PDF Published AUM": (
+              f"{pdf_aum_val:.2f} Cr" if pdf_aum_val is not None else "N/A"
+          ),
+          "Difference": (
+              f"{diff:.2f} Cr"
+              if (pdf_aum_val is not None and excel_aum_val is not None)
+              else "N/A"
+          ),
+          "Audit Status": status,
+      })
+
+    df_aum_audit = pd.DataFrame(aum_audit_rows)
+    styled_aum_audit = apply_status_style(df_aum_audit, "Audit Status")
+    st.dataframe(styled_aum_audit, use_container_width=True, hide_index=True)
+
+# -------------------------------------------------------------
+# TAB 3: SCHEME-WISE DEEP AUDIT (WITH WORKING PREV & NEXT NAVIGATION)
+# -------------------------------------------------------------
+with tabs[2]:
   st.subheader("📑 Scheme-Wise Deep Portfolio Audit")
 
   # Build scheme dictionary with clean names
@@ -810,7 +894,7 @@ with tabs[1]:
         "4. Corporate Debt",
         "5. Government Securities",
         "6. Equity Holdings",
-        "7. AUM Charts & Breakup",
+        "7. AUM Audit & Charts",
     ])
 
     # 1. Asset Allocation & Mandates
@@ -984,9 +1068,9 @@ with tabs[1]:
             " Fund)."
         )
 
-    # 7. AUM Charts & Breakup
+    # 7. AUM Audit & Charts
     with sub_tabs[6]:
-      st.markdown("#### Scheme Asset Class Breakup & AUM Chart")
+      st.markdown("#### Scheme Asset Class Breakup & AUM Audit")
       found_aum_key = None
       if aum_data and sheet_key:
         for k in aum_data.keys():
@@ -994,13 +1078,35 @@ with tabs[1]:
             found_aum_key = k
             break
 
-      if found_aum_key and found_aum_key in aum_data:
-        info_a = aum_data[found_aum_key]
-        st.write(
-            f"**Matched AUM Code:** `{found_aum_key}` | **Total AUM:**"
-            f" `{info_a['Total AUM (Cr)']:.2f} Cr`"
+      pdf_aum_val = (
+          pdf_info["aum_candidates"][-1]
+          if (pdf_info and pdf_info["aum_candidates"])
+          else None
+      )
+      excel_aum_val = (
+          aum_data[found_aum_key]["Total AUM (Cr)"] if found_aum_key else None
+      )
+
+      # AUM Direct Cross Comparison Metrics
+      m_c1, m_c2, m_c3 = st.columns(3)
+      m_c1.metric(
+          "PDF Published AUM",
+          f"{pdf_aum_val:.2f} Cr" if pdf_aum_val else "N/A",
+      )
+      m_c2.metric(
+          "Excel System AUM",
+          f"{excel_aum_val:.2f} Cr" if excel_aum_val else "N/A",
+      )
+      if pdf_aum_val and excel_aum_val:
+        diff_aum = abs(pdf_aum_val - excel_aum_val)
+        m_c3.metric(
+            "Difference",
+            f"{diff_aum:.2f} Cr",
+            delta="MATCH" if diff_aum <= 0.05 else "-MISMATCH",
         )
 
+      if found_aum_key and found_aum_key in aum_data:
+        info_a = aum_data[found_aum_key]
         chart_df = pd.DataFrame({
             "Asset Class": [
                 "Corporate Debt",
@@ -1020,19 +1126,17 @@ with tabs[1]:
         if not chart_df_non_zero.empty:
           st.bar_chart(chart_df_non_zero)
           st.table(chart_df)
-        else:
-          st.write("AUM Values are 0 or not available.")
       else:
         st.info(
-            "Upload `AUM Breakup.xlsx` in the sidebar to view AUM"
-            " breakdown charts."
+            "Upload `AUM Breakup.xlsx` in sidebar to view asset class"
+            " breakdown."
         )
 
 # -------------------------------------------------------------
-# TAB 3: AUM BREAKUP AUDIT (ALL SCHEMES)
+# TAB 4: AUM ASSET BREAKUP (RAW CODES)
 # -------------------------------------------------------------
-with tabs[2]:
-  st.subheader("💰 Scheme AUM Breakup Audit")
+with tabs[3]:
+  st.subheader("📊 Raw AUM Code Breakdown Table")
   if not aum_data:
     st.info(
         "💡 Sirf **`AUM Breakup.xlsx`** upload karein AUM numbers verify"
@@ -1052,9 +1156,9 @@ with tabs[2]:
     st.dataframe(pd.DataFrame(aum_rows), use_container_width=True, hide_index=True)
 
 # -------------------------------------------------------------
-# TAB 4: YTM & DURATION AUDIT
+# TAB 5: YTM & DURATION AUDIT
 # -------------------------------------------------------------
-with tabs[3]:
+with tabs[4]:
   st.subheader("📉 Yield to Maturity (YTM) & Duration Audit")
   if not ytm_data:
     st.info(
@@ -1074,19 +1178,17 @@ with tabs[3]:
     st.dataframe(pd.DataFrame(ytm_rows), use_container_width=True, hide_index=True)
 
 # -------------------------------------------------------------
-# TAB 5: EXPORT AUDIT WORKBOOK
+# TAB 6: EXPORT AUDIT WORKBOOK
 # -------------------------------------------------------------
-with tabs[4]:
+with tabs[5]:
   st.subheader("📥 Export Full Audit Reconciliation Report")
 
   out_buf = io.BytesIO()
   with pd.ExcelWriter(out_buf, engine="xlsxwriter") as writer:
     if nav_data and "df_nav_audit" in locals():
       df_nav_audit.to_excel(writer, sheet_name="NAV Audit", index=False)
-    if aum_data and "aum_rows" in locals():
-      pd.DataFrame(aum_rows).to_excel(
-          writer, sheet_name="AUM Audit", index=False
-      )
+    if "df_aum_audit" in locals():
+      df_aum_audit.to_excel(writer, sheet_name="AUM Master Audit", index=False)
     if ytm_data and "ytm_rows" in locals():
       pd.DataFrame(ytm_rows).to_excel(
           writer, sheet_name="YTM & Duration", index=False
