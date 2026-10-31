@@ -1,8 +1,8 @@
 import io
-import re
 import openpyxl
 import pandas as pd
 import pypdf
+import re
 import streamlit as st
 
 st.set_page_config(
@@ -129,7 +129,7 @@ BUILTIN_SCHEME_NAMES = {
 
 
 # -------------------------------------------------------------
-# TABLE STYLING HELPER (MISMATCH / NOT IN PDF / BREACH: Red, PASS: Green)
+# TABLE STYLING HELPER
 # -------------------------------------------------------------
 def color_status_cells(val):
   if not isinstance(val, str):
@@ -157,7 +157,7 @@ def apply_status_style(df, column_name):
 
 
 # -------------------------------------------------------------
-# SIDEBAR: Flexible Multi-File Uploaders (ALL OPTIONAL)
+# SIDEBAR: Multi-File Uploaders
 # -------------------------------------------------------------
 with st.sidebar:
   st.header("📂 Data Sources")
@@ -187,7 +187,7 @@ with st.sidebar:
 
 
 # -------------------------------------------------------------
-# PDF PARSER (Extracts SFIN, Scheme Name, NAV & AUM)
+# PDF PARSER
 # -------------------------------------------------------------
 @st.cache_data(show_spinner=False)
 def extract_pdf_data(pdf_bytes):
@@ -218,7 +218,6 @@ def extract_pdf_data(pdf_bytes):
           r"Modified\s+Duration\s*\|?\s*([\d\.]+)", text, re.IGNORECASE
       )
 
-      # Extract fund name from header line
       header_fund_name = None
       for line in text.split("\n")[:10]:
         if any(s in line for s in sfin_matches):
@@ -263,7 +262,7 @@ def extract_pdf_data(pdf_bytes):
 
 
 # -------------------------------------------------------------
-# EXCEL PARSER (Deep Scanning & Header Exclusion)
+# EXCEL PARSER (Deep Scanning)
 # -------------------------------------------------------------
 @st.cache_data(show_spinner=False)
 def parse_master_sheets(master_bytes):
@@ -333,7 +332,7 @@ def parse_master_sheets(master_bytes):
             or sheet_name
         )
 
-      # 1. Asset Allocation & Mandates
+      # 1. Asset Allocation
       asset_alloc = []
       for r in range(6, 20):
         for c in range(5, 12):
@@ -643,7 +642,7 @@ status_cols[5].metric("Tolerance", f"{tolerance:.2f}%")
 
 st.write("")
 
-# Main Tabs (AUM Master Audit Tab Included as Tab 2)
+# Main Tabs (AUM Master Audit as Tab 2)
 tabs = st.tabs([
     "📈 NAV Master Audit (All Schemes)",
     "💰 AUM Master Audit (All Schemes)",
@@ -652,6 +651,11 @@ tabs = st.tabs([
     "📉 YTM & Duration Audit",
     "📥 Export Full Audit Workbook",
 ])
+
+# Helper function for text normalization
+def norm_txt(s):
+  return re.sub(r"[^A-Za-z0-9]", "", str(s or "")).upper()
+
 
 # -------------------------------------------------------------
 # TAB 1: NAV MASTER AUDIT (PDF vs Excel Cross Check)
@@ -733,7 +737,6 @@ with tabs[1]:
     )
   else:
     aum_audit_rows = []
-    # Collect all available schemes from PDF or NAV or Master
     all_aum_sfins = set(list(pdf_data.keys()) + list(nav_data.keys()))
 
     for sfin in sorted(list(all_aum_sfins)):
@@ -753,19 +756,62 @@ with tabs[1]:
       if p_info and p_info["aum_candidates"]:
         pdf_aum_val = p_info["aum_candidates"][-1]
 
-      # Extract Excel AUM from AUM Breakup
+      # Extract Excel AUM using normalized keyword matching
       excel_aum_val = None
       sheet_name_cand = master_data.get(sfin, {}).get("sheet_name", "")
+      n_sfin = norm_txt(sfin)
+      n_name = norm_txt(fname)
+      n_sheet = norm_txt(sheet_name_cand)
 
-      # Try matching by sfin, sheet name, or fund name abbreviation
-      for code_key, a_info in aum_data.items():
-        if (
-            code_key.upper() in sfin.upper()
-            or (sheet_name_cand and code_key.upper() in sheet_name_cand.upper())
-            or code_key.upper() in fname.upper()
-        ):
-          excel_aum_val = a_info["Total AUM (Cr)"]
+      matched_aum_code = None
+      # 1. Direct normalized match
+      for k in aum_data.keys():
+        nk = norm_txt(k)
+        if nk and (nk in n_sfin or nk in n_name or nk in n_sheet):
+          matched_aum_code = k
           break
+
+      # 2. Fuzzy Keyword match
+      if not matched_aum_code:
+        for kw in [
+            "GROWTH",
+            "BOND",
+            "SECURE",
+            "STABL",
+            "GILT",
+            "FIXINT",
+            "FIF",
+            "FLOAT",
+            "MMKT",
+            "SHTDB",
+            "DEBT",
+            "ADVANT",
+            "CAPPROT",
+            "MAXI",
+            "BUILDER",
+            "ENHANCE",
+            "PROTECT",
+            "ENRICH",
+            "NOURISH",
+            "CREATOR",
+            "MAGNI",
+            "BALANCE",
+            "ASSURE",
+            "TITAN",
+            "PLATIN",
+            "PUREEQ",
+            "LIQPLUS",
+        ]:
+          if kw in n_sfin or kw in n_name or kw in n_sheet:
+            for k in aum_data.keys():
+              if kw in norm_txt(k):
+                matched_aum_code = k
+                break
+          if matched_aum_code:
+            break
+
+      if matched_aum_code and matched_aum_code in aum_data:
+        excel_aum_val = aum_data[matched_aum_code]["Total AUM (Cr)"]
 
       status = "PENDING PDF"
       diff = 0.0
@@ -804,12 +850,11 @@ with tabs[1]:
     st.dataframe(styled_aum_audit, use_container_width=True, hide_index=True)
 
 # -------------------------------------------------------------
-# TAB 3: SCHEME-WISE DEEP AUDIT (WITH WORKING PREV & NEXT NAVIGATION)
+# TAB 3: SCHEME-WISE DEEP AUDIT (WITH WORKING PREV & NEXT)
 # -------------------------------------------------------------
 with tabs[2]:
   st.subheader("📑 Scheme-Wise Deep Portfolio Audit")
 
-  # Build scheme dictionary with clean names
   available_schemes = {}
   all_possible_sfins = set(list(master_data.keys()) + list(pdf_data.keys()))
 
@@ -843,7 +888,7 @@ with tabs[2]:
   else:
     sorted_sfins = sorted(list(available_schemes.keys()))
 
-    # Ensure scheme_selector_key is initialized with a valid scheme
+    # Ensure key initialized
     if (
         "scheme_selector_key" not in st.session_state
         or st.session_state.scheme_selector_key not in sorted_sfins
@@ -852,7 +897,7 @@ with tabs[2]:
 
     current_idx = sorted_sfins.index(st.session_state.scheme_selector_key)
 
-    # 3-Column Navigation: [ ⬅️ Previous ] [ Dropdown ] [ Next ➡️ ]
+    # 3-Column Navigation
     nav_col1, nav_col2, nav_col3 = st.columns([1.2, 5, 1.2])
 
     with nav_col1:
@@ -886,7 +931,6 @@ with tabs[2]:
     pdf_text = pdf_info["page_text"] if pdf_info else ""
     sheet_key = s_master["sheet_name"] if s_master else ""
 
-    # Sub-tabs for each specific module
     sub_tabs = st.tabs([
         "1. Asset Allocation",
         "2. Rating Profile",
@@ -1068,15 +1112,73 @@ with tabs[2]:
             " Fund)."
         )
 
-    # 7. AUM Audit & Charts
+    # 7. AUM Audit & Charts (Robust Auto-Matching + Override)
     with sub_tabs[6]:
       st.markdown("#### Scheme Asset Class Breakup & AUM Audit")
+
       found_aum_key = None
-      if aum_data and sheet_key:
+      if aum_data:
+        n_sfin = norm_txt(chosen_sfin)
+        n_name = norm_txt(available_schemes.get(chosen_sfin, ""))
+        n_sheet = norm_txt(sheet_key)
+
         for k in aum_data.keys():
-          if k.upper() in sheet_key.upper() or sheet_key.upper() in k.upper():
+          nk = norm_txt(k)
+          if nk and (nk in n_sfin or nk in n_name or nk in n_sheet):
             found_aum_key = k
             break
+
+        if not found_aum_key:
+          for kw in [
+              "GROWTH",
+              "BOND",
+              "SECURE",
+              "STABL",
+              "GILT",
+              "FIXINT",
+              "FIF",
+              "FLOAT",
+              "MMKT",
+              "SHTDB",
+              "DEBT",
+              "ADVANT",
+              "CAPPROT",
+              "MAXI",
+              "BUILDER",
+              "ENHANCE",
+              "PROTECT",
+              "ENRICH",
+              "NOURISH",
+              "CREATOR",
+              "MAGNI",
+              "BALANCE",
+              "ASSURE",
+              "TITAN",
+              "PLATIN",
+              "PUREEQ",
+              "LIQPLUS",
+          ]:
+            if kw in n_sfin or kw in n_name or kw in n_sheet:
+              for k in aum_data.keys():
+                if kw in norm_txt(k):
+                  found_aum_key = k
+                  break
+            if found_aum_key:
+              break
+
+        aum_keys_list = sorted(list(aum_data.keys()))
+        default_idx = (
+            aum_keys_list.index(found_aum_key)
+            if found_aum_key in aum_keys_list
+            else 0
+        )
+        selected_aum_code = st.selectbox(
+            "Matched AUM Code (From AUM Breakup.xlsx):",
+            options=aum_keys_list,
+            index=default_idx,
+            help="Auto-matched from Breakup file. Change manually if needed.",
+        )
+        found_aum_key = selected_aum_code
 
       pdf_aum_val = (
           pdf_info["aum_candidates"][-1]
@@ -1084,7 +1186,9 @@ with tabs[2]:
           else None
       )
       excel_aum_val = (
-          aum_data[found_aum_key]["Total AUM (Cr)"] if found_aum_key else None
+          aum_data[found_aum_key]["Total AUM (Cr)"]
+          if (found_aum_key and found_aum_key in aum_data)
+          else None
       )
 
       # AUM Direct Cross Comparison Metrics
