@@ -661,71 +661,54 @@ ytm_data = parse_ytm_file(uploaded_ytm.getvalue()) if uploaded_ytm else {}
 
 
 # -------------------------------------------------------------
-# UNIVERSAL SMART AUM MATCHING (Handles both Group & Individual ULIF)
+# EXACT EXPLICIT AUM CODE MAPPING (100% Precision)
 # -------------------------------------------------------------
+EXPLICIT_AUM_MAP = {
+    # Group Funds (ULGF)
+    "ULGF00112/06/01BSLGGROWTH109": ["GR-GROWTH", "GRGROWTH"],
+    "ULGF00212/06/01BSLGSECURE109": ["GR-PROTECTOR", "GR-SECURE", "GRSECURE"],
+    "ULGF00312/06/01BSLGSTABLE109": ["GR-STABLE", "GRSTABLE"],
+    "ULGF00416/07/02BSLGFIXINT109": ["GR-FIF", "GR-FIXINT", "GRFIXINT"],
+    "ULGF00530/05/03BSLIGRBOND109": ["GR-BOND", "GRBOND"],
+    "ULGF00630/05/03BSLIGRGILT109": ["GR-GILT", "GRGILT"],
+    "ULGF00724/08/04BSLIGFLOAT109": ["GR-FLOAT", "GRFLOAT"],
+    "ULGF00824/08/04BSLIGRMMKT109": ["GR-MMFUND", "GR-MMKT", "GRMMKT"],
+    "ULGF01026/11/07BSLIGGRADV109": ["GR-ADVANTAGE", "GR-GRADV", "GRADV"],
+    "ULGF01322/09/08BSLGSHTDBT109": ["GR-DEBTFUND", "GR-SHTDBT", "GRSHTDBT"],
+    "ULGF01425/02/10BSLGINCADV109": ["GR-INC-ADV", "GRINCADV"],
+    "ULGF01525/02/10BSLIGRMAXI109": ["GR-MAXIMISER", "GRMAXI"],
+    "ULGF02311/07/25BSLCAPPRTC109": ["GRCAPPROTECT", "GR-CAPPROT"],
+    # Individual & Pension Funds (ULIF)
+    "ULIF00113/03/01BSLBUILDER109": ["IND-BUILDER", "INDBUILDER"],
+    "ULIF00213/03/01BSLENHANCE109": ["IND-ENHANCER", "INDENHANCER"],
+    "ULIF00313/03/01BSLPROTECT109": ["INDPROTECTOR", "IND-PROTECT"],
+    "ULIF00404/03/03BSLIENRICH109": ["IPP-ENRICH", "ENRICH"],
+    "ULIF00704/02/04BSLCREATOR109": ["IND-CREATOR", "INDCREATOR"],
+    "ULIF00826/06/04BSLIIMAGNI109": ["INDMAGNIFIER", "IND-MAGNIFIER"],
+    "ULIF01008/07/05BSLIASSURE109": ["IND-AF", "INDAF"],
+    "ULIF01101/06/07BSLIINMAXI109": ["INDMAXIMISER", "IND-MAXIMISER"],
+    "ULIF01217/10/07BSLINMULTI109": ["IND-MULTI", "INDMULTI"],
+    "ULIF01507/08/08BSLIINCADV109": ["INC-ADV-FUND", "INCADV"],
+}
+
+
 def get_exact_aum_for_sfin(sfin, fund_name, aum_data):
   if not aum_data:
     return None, None
 
-  n_sfin = norm_txt(sfin)
-  n_name = norm_txt(fund_name)
-
-  # 1. Exact or Substring match
-  for k in aum_data.keys():
-    nk = norm_txt(k)
-    if nk and nk in n_sfin:
-      return k, aum_data[k]["Total AUM (Cr)"]
-
-  for k in aum_data.keys():
-    nk = norm_txt(k)
-    if nk and (nk in n_name or n_name in nk):
-      return k, aum_data[k]["Total AUM (Cr)"]
-
-  # 2. Comprehensive Keyword Fallback (Covers all ULIF and ULGF schemes)
-  keywords = [
-      "GROWTH",
-      "BOND",
-      "SECURE",
-      "STABL",
-      "GILT",
-      "FIXINT",
-      "FIF",
-      "FLOAT",
-      "MMKT",
-      "SHTDB",
-      "DEBT",
-      "ADVANT",
-      "CAPPROT",
-      "MAXI",
-      "BUILDER",
-      "ENHANCE",
-      "PROTECT",
-      "ENRICH",
-      "NOURISH",
-      "CREATOR",
-      "MAGNI",
-      "BALANCE",
-      "ASSURE",
-      "TITAN",
-      "PLATIN",
-      "PUREEQ",
-      "LIQPLUS",
-      "VALUEM",
-      "STALC",
-      "CNFIDX",
-      "MNC",
-      "ESG",
-      "SMALCP",
-      "ALPHA",
-      "MOMNTM",
-      "DIVYLD",
-      "FLXCAP",
-  ]
-  for kw in keywords:
-    if kw in n_sfin or kw in n_name:
+  # 1. Check Explicit Map first
+  if sfin in EXPLICIT_AUM_MAP:
+    for candidate in EXPLICIT_AUM_MAP[sfin]:
       for k in aum_data.keys():
-        if kw in norm_txt(k):
+        if candidate.upper() == k.strip().upper():
           return k, aum_data[k]["Total AUM (Cr)"]
+
+  # 2. Exact normalized code matching
+  n_sfin = norm_txt(sfin)
+  for k in aum_data.keys():
+    nk = norm_txt(k)
+    if nk and len(nk) >= 4 and nk in n_sfin:
+      return k, aum_data[k]["Total AUM (Cr)"]
 
   return None, None
 
