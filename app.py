@@ -157,11 +157,14 @@ def audit_line_item_against_pdf(item_name, excel_val, pdf_text, tolerance=0.05):
     if not pdf_text:
         return "N/A", "N/A", "PENDING PDF"
         
+    val_2dec = f"{excel_val:.2f}"
+    val_1dec = f"{excel_val:.1f}"
     clean_name = re.sub(r"[^A-Za-z0-9\s]", " ", str(item_name)).strip()
     words = [w for w in clean_name.split() if len(w) >= 3 and w.lower() not in [
         "except", "other", "from", "with", "than", "supply", "products", "activities", "compulsory", "social", "limited", "ltd"
     ]]
     
+    # 1. Row-by-Row Search (Name aur Number ek hi line ya agal-bagal lines par)
     best_line = None
     max_matches = 0
     lines = pdf_text.split("\n")
@@ -177,19 +180,22 @@ def audit_line_item_against_pdf(item_name, excel_val, pdf_text, tolerance=0.05):
                 best_line += " " + lines[idx + 1].strip()
         elif len(words) == 1 and re.search(r"\b" + re.escape(words[0]) + r"\b", line_clean, re.IGNORECASE):
             best_line = line_clean
+            if not re.search(r"\d+\.\d+", best_line) and idx + 1 < len(lines):
+                best_line += " " + lines[idx + 1].strip()
             break
 
-    # If MMI is not directly found, check for Money Market
+    # MMI / Money Market alias support
     if not best_line and "MMI" in clean_name.upper():
-        for line in lines:
+        for idx, line in enumerate(lines):
             if "MONEY MARKET" in line.upper():
                 best_line = line.strip()
+                if not re.search(r"\d+\.\d+", best_line) and idx + 1 < len(lines):
+                    best_line += " " + lines[idx + 1].strip()
                 break
 
     if best_line:
         pcts_in_line = re.findall(r"(\d{1,3}\.\d{1,2})\s*%?", best_line)
         if pcts_in_line:
-            # Pick the candidate percentage closest to excel_val (handles '20.18% 10%-20%')
             closest_cand = None
             min_d = 999.0
             for p in pcts_in_line:
@@ -197,15 +203,43 @@ def audit_line_item_against_pdf(item_name, excel_val, pdf_text, tolerance=0.05):
                 if d < min_d:
                     min_d = d
                     closest_cand = float(p)
-            if closest_cand is not None:
-                status = "PASS" if min_d <= tolerance else f"MISMATCH ({min_d:.2f}%)"
-                return f"{closest_cand:.2f}%", f"{min_d:.2f}%", status
+            if closest_cand is not None and min_d <= tolerance:
+                return f"{closest_cand:.2f}%", f"{min_d:.2f}%", "PASS"
+            elif closest_cand is not None and min_d <= 2.0:
+                return f"{closest_cand:.2f}%", f"{min_d:.2f}%", f"MISMATCH ({min_d:.2f}%)"
 
-    # Fallback: Check if exact value is present on page
-    str_exact = f"{excel_val:.2f}%"
-    str_one = f"{excel_val:.1f}%"
-    if str_exact in pdf_text or str_one in pdf_text:
-        return str_exact, "0.00%", "PASS"
+    # 2. Table-Column Stream Search (InDesign split text: 20.18%, 20.18 %, ya plain 20.18)
+    patterns = [
+        rf"\b{re.escape(val_2dec)}\s*%",
+        rf"\b{re.escape(val_2dec)}\b",
+        rf"\b{re.escape(val_1dec)}\s*%",
+    ]
+    for pat in patterns:
+        m = re.search(pat, pdf_text)
+        if m:
+            found_str = m.group(0).replace(" ", "")
+            if not found_str.endswith("%"):
+                found_str += "%"
+            return found_str, "0.00%", "PASS"
+
+    # 3. Numeric Proximity Matcher
+    all_numbers = re.findall(r"\b(\d{1,3}\.\d{1,2})\b", pdf_text)
+    closest = None
+    min_diff = 999.0
+    for num_s in all_numbers:
+        try:
+            n_val = float(num_s)
+            d = abs(n_val - excel_val)
+            if d < min_diff:
+                min_diff = d
+                closest = n_val
+        except:
+            pass
+
+    if closest is not None and min_diff <= tolerance:
+        return f"{closest:.2f}%", f"{min_diff:.2f}%", "PASS"
+    elif closest is not None and min_diff <= 1.5:
+        return f"{closest:.2f}%", f"{min_diff:.2f}%", f"MISMATCH ({min_diff:.2f}%)"
 
     return "NOT IN PDF", "N/A", "MISMATCH (NOT IN PDF)"
 
