@@ -256,7 +256,7 @@ def extract_pdf_data(pdf_bytes):
     return schemes_pdf
 
 # -------------------------------------------------------------
-# EXCEL PARSER (Master Sheets)
+# EXCEL PARSER (Master Sheets with Heading Totals Capture)
 # -------------------------------------------------------------
 @st.cache_data(show_spinner=False)
 def parse_master_sheets(master_bytes):
@@ -376,7 +376,7 @@ def parse_master_sheets(master_bytes):
                                 break
                         break
 
-            # 4. Line Holdings
+            # 4. Line Holdings (Captures Heading Totals + Individual Items)
             corp_debt, g_sec, equity = [], [], []
             curr_sec = None
             for r in range(5, 95):
@@ -389,12 +389,30 @@ def parse_master_sheets(master_bytes):
 
                 if item_upper == "CORPORATE DEBT":
                     curr_sec = "corp"
+                    if wt_cell is not None:
+                        try:
+                            w_num = float(wt_cell)
+                            w_pct = w_num * 100 if w_num <= 1.0 else w_num
+                            corp_debt.append({"Security Description": "📌 CORPORATE DEBT (HEADING TOTAL)", "Weight (%)": f"{w_pct:.2f}%", "Raw Weight": round(w_pct, 2)})
+                        except: pass
                     continue
                 elif item_upper in ["GOVERNMENT SECURITIES", "CENTRAL GOVERNMENT SECURITIES"]:
                     curr_sec = "gsec"
+                    if wt_cell is not None:
+                        try:
+                            w_num = float(wt_cell)
+                            w_pct = w_num * 100 if w_num <= 1.0 else w_num
+                            g_sec.append({"Security Description": "📌 GOVERNMENT SECURITIES (HEADING TOTAL)", "Weight (%)": f"{w_pct:.2f}%", "Raw Weight": round(w_pct, 2)})
+                        except: pass
                     continue
                 elif item_upper == "EQUITY":
                     curr_sec = "equity"
+                    if wt_cell is not None:
+                        try:
+                            w_num = float(wt_cell)
+                            w_pct = w_num * 100 if w_num <= 1.0 else w_num
+                            equity.append({"Security Description": "📌 EQUITY (HEADING TOTAL)", "Weight (%)": f"{w_pct:.2f}%", "Raw Weight": round(w_pct, 2)})
+                        except: pass
                     continue
                 elif item_upper in ["MMI", "TOTAL", "SECURITISED DEBT", "OTHER SECURITISED DEBT", "SECURITIES"]:
                     curr_sec = None
@@ -413,6 +431,23 @@ def parse_master_sheets(master_bytes):
                             equity.append(clean_row)
                     except:
                         pass
+
+            # Fallback: If heading total was not on the section header row in holdings, pull from asset allocation
+            if not any("HEADING TOTAL" in x["Security Description"] for x in corp_debt):
+                for a in asset_alloc:
+                    if "CORPORATE" in a["Asset Category"].upper():
+                        corp_debt.insert(0, {"Security Description": "📌 CORPORATE DEBT (HEADING TOTAL)", "Weight (%)": a["Actual (%)"], "Raw Weight": a["Raw Actual"]})
+                        break
+            if not any("HEADING TOTAL" in x["Security Description"] for x in g_sec):
+                for a in asset_alloc:
+                    if "GOVERNMENT" in a["Asset Category"].upper() or "G-SEC" in a["Asset Category"].upper():
+                        g_sec.insert(0, {"Security Description": "📌 GOVERNMENT SECURITIES (HEADING TOTAL)", "Weight (%)": a["Actual (%)"], "Raw Weight": a["Raw Actual"]})
+                        break
+            if not any("HEADING TOTAL" in x["Security Description"] for x in equity):
+                for a in asset_alloc:
+                    if a["Asset Category"].strip().upper() == "EQUITY":
+                        equity.insert(0, {"Security Description": "📌 EQUITY (HEADING TOTAL)", "Weight (%)": a["Actual (%)"], "Raw Weight": a["Raw Actual"]})
+                        break
 
             parsed[sfin] = {
                 "sheet_name": sheet_name,
@@ -549,7 +584,6 @@ EXHAUSTIVE_SFIN_MAP = {
     "ULIF00704/02/04BSLCREATOR109": "IND-CREATOR",
     "ULIF00826/06/04BSLIIMAGNI109": "INDMAGNIFIER",
     "ULIF00931/05/05BSLBALANCE109": "BILICO",
-    "ULIF001008/07/05BSLIASSURE109": "IND-AF",
     "ULIF01008/07/05BSLIASSURE109": "IND-AF",
     "ULIF01101/06/07BSLIINMAXI109": "INDMAXIMISER",
     "ULIF01217/10/07BSLINMULTI109": "IND-MULTI",
@@ -890,7 +924,7 @@ with tabs[2]:
             else:
                 st.info("Upload Master Factsheet Excel to view sectoral allocation.")
 
-        # 4. Corporate Debt (LIVE EXCEL VS PDF CROSS-AUDIT)
+        # 4. Corporate Debt (LIVE EXCEL VS PDF CROSS-AUDIT WITH HEADING TOTAL)
         with sub_tabs[3]:
             st.markdown("#### Corporate Debt Holdings Audit (Excel vs. PDF Published)")
             if s_master and s_master["corp_debt"]:
@@ -913,7 +947,7 @@ with tabs[2]:
             else:
                 st.info("No Corporate Debt instruments held in this scheme.")
 
-        # 5. Government Securities (LIVE EXCEL VS PDF CROSS-AUDIT)
+        # 5. Government Securities (LIVE EXCEL VS PDF CROSS-AUDIT WITH HEADING TOTAL)
         with sub_tabs[4]:
             st.markdown("#### Government Securities Holdings Audit (Excel vs. PDF Published)")
             if s_master and s_master["g_sec"]:
@@ -936,7 +970,7 @@ with tabs[2]:
             else:
                 st.info("No Government Securities held in this scheme.")
 
-        # 6. Equity Holdings (LIVE EXCEL VS PDF CROSS-AUDIT)
+        # 6. Equity Holdings (LIVE EXCEL VS PDF CROSS-AUDIT WITH HEADING TOTAL)
         with sub_tabs[5]:
             st.markdown("#### Equity Holdings Audit (Excel vs. PDF Published)")
             if s_master and s_master["equity"]:
