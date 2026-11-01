@@ -150,6 +150,45 @@ def norm_txt(s):
     return re.sub(r"[^A-Za-z0-9]", "", str(s or "")).upper()
 
 # -------------------------------------------------------------
+# PDF PERCENTAGE AUDIT HELPER (Matches Exact Number In PDF)
+# -------------------------------------------------------------
+def audit_pct_against_pdf(excel_val, pdf_text, tolerance=0.05):
+    if not pdf_text:
+        return "N/A", "N/A", "PENDING PDF"
+    str_exact = f"{excel_val:.2f}%"
+    str_one = f"{excel_val:.1f}%"
+    if str_exact in pdf_text or str_one in pdf_text:
+        return str_exact, "0.00%", "PASS"
+
+    all_pcts = re.findall(r"(\d{1,3}\.\d{1,2})%", pdf_text)
+    all_floats = re.findall(r"\b(\d{1,2}\.\d{2})\b", pdf_text)
+    candidates = []
+    for p in all_pcts:
+        try:
+            candidates.append(float(p))
+        except:
+            pass
+    for f in all_floats:
+        try:
+            candidates.append(float(f))
+        except:
+            pass
+
+    closest, min_d = None, 999.0
+    for cand in candidates:
+        d = abs(cand - excel_val)
+        if d < min_d:
+            min_d = d
+            closest = cand
+
+    if closest is not None and min_d <= tolerance:
+        return f"{closest:.2f}%", f"{min_d:.2f}%", "PASS"
+    elif closest is not None and min_d <= 2.0:
+        return f"{closest:.2f}%", f"{min_d:.2f}%", f"MISMATCH ({min_d:.2f}%)"
+    else:
+        return "NOT IN PDF", "N/A", "MISMATCH (NOT IN PDF)"
+
+# -------------------------------------------------------------
 # SIDEBAR: Multi-File Uploaders
 # -------------------------------------------------------------
 with st.sidebar:
@@ -181,7 +220,7 @@ def extract_pdf_data(pdf_bytes):
             nav_candidates = re.findall(r"\b\d{1,3}\.\d{4}\b", text)
             aum_candidates = re.findall(r"([\d\.]+)\s*Cr", text)
 
-            fm_match = re.search(r"FUND\s+MANAGER:\s*([^\n\r]+)", text, re.IGNORECASE)
+            fm_match = re.search(r"FUND\s+MANAGER:\s*([^\r\n]+)", text, re.IGNORECASE)
             fm_val = fm_match.group(1).strip() if fm_match else ""
 
             ytm_match = re.search(r"Yield\s+to\s+Maturity\s*\|?\s*([\d\.]+)%", text, re.IGNORECASE)
@@ -261,27 +300,34 @@ def parse_master_sheets(master_bytes):
             if not fund_name or fund_name.upper() in ["EQUITY", "CORPORATE DEBT", "TOTAL"]:
                 fund_name = BUILTIN_SCHEME_NAMES.get(sfin) or ws.cell(2, 3).value or sheet_name
 
-            # 1. Asset Allocation
+            # 1. Asset Allocation (Clean rows, filter out junk labels)
             asset_alloc = []
-            for r in range(6, 20):
+            seen_cats = set()
+            for r in range(6, 25):
                 for c in range(5, 12):
                     cat = ws.cell(r, c).value
-                    if cat and any(ac in str(cat).upper() for ac in ["EQUITY", "DEBT", "GOVERNMENT", "CORPORATE", "MMI", "TOTAL"]):
-                        actual = ws.cell(r, c + 1).value
-                        rng = ws.cell(r, c + 2).value
-                        if actual is not None and str(cat).strip().upper() not in ["ASSET CATEGORY", "ASSET ALLOCATION"]:
-                            try:
-                                act_val = float(actual)
-                                pct = act_val * 100 if act_val <= 1.0 else act_val
-                                asset_alloc.append({
-                                    "Asset Category": str(cat).strip(),
-                                    "Actual (%)": f"{pct:.2f}%",
-                                    "Raw Actual": round(pct, 2),
-                                    "Defined Mandate Range": str(rng) if rng else "N/A",
-                                })
-                            except:
-                                pass
-                        break
+                    if cat and isinstance(cat, str):
+                        cat_str = cat.strip()
+                        cat_upper = cat_str.upper()
+                        if any(x in cat_upper for x in ["IN RS", "CRORES", "TOTAL", "ASSET CATEGORY", "ASSET ALLOCATION"]):
+                            continue
+                        if any(ac in cat_upper for ac in ["EQUITY", "DEBT", "GOVERNMENT", "CORPORATE", "MMI", "OTHER"]):
+                            actual = ws.cell(r, c + 1).value
+                            rng = ws.cell(r, c + 2).value
+                            if actual is not None and cat_upper not in seen_cats:
+                                try:
+                                    act_val = float(actual)
+                                    pct = act_val * 100 if act_val <= 1.0 else act_val
+                                    seen_cats.add(cat_upper)
+                                    asset_alloc.append({
+                                        "Asset Category": cat_str,
+                                        "Actual (%)": f"{pct:.2f}%",
+                                        "Raw Actual": round(pct, 2),
+                                        "Defined Mandate Range": str(rng) if rng else "N/A",
+                                    })
+                                except:
+                                    pass
+                            break
 
             # 2. Universal Rating Profile Scanner
             ratings = []
@@ -358,7 +404,7 @@ def parse_master_sheets(master_bytes):
                     try:
                         w_num = float(wt_cell)
                         w_pct = w_num * 100 if w_num <= 1.0 else w_num
-                        clean_row = {"Security Description": item_str, "Weight (%)": f"{w_pct:.2f}%", "Raw Weight": round(w_pct, 2), "Status": "PASS"}
+                        clean_row = {"Security Description": item_str, "Weight (%)": f"{w_pct:.2f}%", "Raw Weight": round(w_pct, 2)}
                         if curr_sec == "corp":
                             corp_debt.append(clean_row)
                         elif curr_sec == "gsec":
@@ -400,7 +446,6 @@ def parse_aum_file(aum_bytes):
             name_val = str(df.iloc[r, 0]).strip() if pd.notnull(df.iloc[r, 0]) else ""
             code_val = str(df.iloc[r, 1]).strip() if pd.notnull(df.iloc[r, 1]) else ""
 
-            # Extract Crores value (Col 3 or fallback to Col 2 / 1e7)
             v_cr = df.iloc[r, 3] if len(df.columns) > 3 and pd.notnull(df.iloc[r, 3]) else None
             if v_cr is None and len(df.columns) > 2 and pd.notnull(df.iloc[r, 2]):
                 v_raw = df.iloc[r, 2]
@@ -504,6 +549,7 @@ EXHAUSTIVE_SFIN_MAP = {
     "ULIF00704/02/04BSLCREATOR109": "IND-CREATOR",
     "ULIF00826/06/04BSLIIMAGNI109": "INDMAGNIFIER",
     "ULIF00931/05/05BSLBALANCE109": "BILICO",
+    "ULIF001008/07/05BSLIASSURE109": "IND-AF",
     "ULIF01008/07/05BSLIASSURE109": "IND-AF",
     "ULIF01101/06/07BSLIINMAXI109": "INDMAXIMISER",
     "ULIF01217/10/07BSLINMULTI109": "IND-MULTI",
@@ -537,24 +583,17 @@ EXHAUSTIVE_SFIN_MAP = {
 def get_exact_aum_for_sfin(sfin, fund_name, aum_data):
     if not aum_data:
         return None, None
-
-    # 1. Direct Lookup by SFIN mapping
     target_code = EXHAUSTIVE_SFIN_MAP.get(sfin)
     if target_code and target_code in aum_data:
         return target_code, aum_data[target_code]["Total AUM (Cr)"]
-
-    # 2. Match by Fund Name in AUM records
     clean_name = norm_txt(fund_name)
     for code, info in aum_data.items():
         if info.get("Name") and norm_txt(info["Name"]) == clean_name:
             return code, info["Total AUM (Cr)"]
-
-    # 3. Match by Code in SFIN
     clean_sfin = norm_txt(sfin)
     for code, info in aum_data.items():
         if len(code) >= 4 and norm_txt(code) in clean_sfin:
             return code, info["Total AUM (Cr)"]
-
     return None, None
 
 # Status Metrics
@@ -738,28 +777,36 @@ with tabs[2]:
             "7. AUM Audit & Charts",
         ])
 
-        # 1. Asset Allocation & Mandates (Clean PASS status)
+        # 1. Asset Allocation & Mandates (LIVE EXCEL VS PDF CROSS-AUDIT)
         with sub_tabs[0]:
-            st.markdown("#### Asset Allocation Compliance")
+            st.markdown("#### Asset Allocation Audit (Excel vs. PDF Published)")
             if s_master and s_master["asset_allocation"]:
-                df_a = pd.DataFrame(s_master["asset_allocation"])
-                def check_mandate(r):
-                    rng = str(r["Defined Mandate Range"])
-                    val = float(r["Raw Actual"])
+                alloc_rows = []
+                for item in s_master["asset_allocation"]:
+                    cat_name = item["Asset Category"]
+                    excel_val = item["Raw Actual"]
+                    pdf_pct, diff_str, status_str = audit_pct_against_pdf(excel_val, pdf_text, tolerance)
+                    
+                    rng = str(item.get("Defined Mandate Range", "N/A"))
                     if "-" in rng and "%" in rng:
                         try:
                             clean = rng.replace("%", "").split("-")
                             lo, hi = float(clean[0]), float(clean[1])
-                            if val < lo or val > hi:
-                                return "BREACH"
-                            return "PASS"
+                            if excel_val < lo or excel_val > hi:
+                                status_str = "BREACH"
                         except:
-                            return "PASS"
-                    return "PASS"
+                            pass
 
-                df_a["Audit Status"] = df_a.apply(check_mandate, axis=1)
-                show_a = df_a[["Asset Category", "Actual (%)", "Defined Mandate Range", "Audit Status"]]
-                styled_a = apply_status_style(show_a, "Audit Status")
+                    alloc_rows.append({
+                        "Asset Category": cat_name,
+                        "Master Excel (%)": f"{excel_val:.2f}%",
+                        "PDF Published (%)": pdf_pct,
+                        "Difference (%)": diff_str,
+                        "Defined Mandate Range": rng,
+                        "Audit Status": status_str,
+                    })
+                df_a = pd.DataFrame(alloc_rows)
+                styled_a = apply_status_style(df_a, "Audit Status")
                 st.dataframe(styled_a, use_container_width=True, hide_index=True)
             else:
                 st.info("Upload Master Factsheet Excel to view Asset Allocation compliance.")
@@ -784,42 +831,13 @@ with tabs[2]:
                 for r_item in excel_ratings:
                     r_label = r_item["Rating"]
                     excel_val = r_item["Raw Weight"]
-
-                    pdf_val_str = "N/A"
-                    diff_val = 0.0
-                    status_str = "PENDING PDF"
-
-                    if pdf_text:
-                        str_target = f"{excel_val:.2f}%"
-                        if str_target in pdf_text or f"{excel_val:.1f}%" in pdf_text:
-                            pdf_val_str = str_target
-                            diff_val = 0.0
-                            status_str = "PASS"
-                        else:
-                            all_pcts = re.findall(r"(\d{1,3}\.\d{1,2})%", pdf_text)
-                            closest = None
-                            min_d = 999
-                            for p in all_pcts:
-                                d = abs(float(p) - excel_val)
-                                if d < min_d:
-                                    min_d = d
-                                    closest = float(p)
-                            if closest is not None and min_d <= 0.05:
-                                pdf_val_str = f"{closest:.2f}%"
-                                diff_val = round(min_d, 2)
-                                status_str = "PASS"
-                            elif closest is not None:
-                                pdf_val_str = f"{closest:.2f}%"
-                                diff_val = round(min_d, 2)
-                                status_str = f"MISMATCH ({diff_val:.2f}%)"
-                            else:
-                                status_str = "NOT IN PDF"
+                    pdf_pct, diff_str, status_str = audit_pct_against_pdf(excel_val, pdf_text, tolerance)
 
                     rating_audit_rows.append({
                         "Credit Rating": r_label,
                         "Master Excel (%)": f"{excel_val:.2f}%",
-                        "PDF Published (%)": pdf_val_str,
-                        "Difference (%)": f"{diff_val:.2f}%" if pdf_val_str != "N/A" else "N/A",
+                        "PDF Published (%)": pdf_pct,
+                        "Difference (%)": diff_str,
                         "Audit Status": status_str,
                     })
 
@@ -844,56 +862,99 @@ with tabs[2]:
             else:
                 st.info("Upload Master Factsheet Excel or PDF to audit rating profile.")
 
-        # 3. Sectoral Allocation (Clean PASS status)
+        # 3. Sectoral Allocation (LIVE EXCEL VS PDF CROSS-AUDIT - EXACTLY LIKE IMAGE 2)
         with sub_tabs[2]:
-            st.markdown("#### Sectoral Concentration & Exposure")
+            st.markdown("#### Sectoral Allocation Audit (Excel vs. PDF Published)")
             if s_master and s_master["sectors"]:
-                df_s = pd.DataFrame(s_master["sectors"])
-                def sec_flag(r):
-                    val = float(r["Raw Weight"])
-                    name = str(r["Sector Name"]).lower()
-                    if "central government" in name or "gilt" in name:
-                        return "PASS"
-                    if val > 25.0:
-                        return "BREACH (>25%)"
-                    return "PASS"
+                sector_audit_rows = []
+                for s_item in s_master["sectors"]:
+                    sec_name = s_item["Sector Name"]
+                    excel_val = s_item["Raw Weight"]
+                    pdf_pct, diff_str, status_str = audit_pct_against_pdf(excel_val, pdf_text, tolerance)
 
-                df_s["Audit Status"] = df_s.apply(sec_flag, axis=1)
-                show_s = df_s[["Sector Name", "Weight (%)", "Audit Status"]]
-                styled_s = apply_status_style(show_s, "Audit Status")
+                    if "central government" not in str(sec_name).lower() and "gilt" not in str(sec_name).lower():
+                        if excel_val > 25.0:
+                            status_str = "BREACH (>25%)"
+
+                    sector_audit_rows.append({
+                        "Sector Name": sec_name,
+                        "Master Excel (%)": f"{excel_val:.2f}%",
+                        "PDF Published (%)": pdf_pct,
+                        "Difference (%)": diff_str,
+                        "Audit Status": status_str,
+                    })
+
+                df_sec_audit = pd.DataFrame(sector_audit_rows)
+                styled_s = apply_status_style(df_sec_audit, "Audit Status")
                 st.dataframe(styled_s, use_container_width=True, hide_index=True)
             else:
                 st.info("Upload Master Factsheet Excel to view sectoral allocation.")
 
-        # 4. Corporate Debt
+        # 4. Corporate Debt (LIVE EXCEL VS PDF CROSS-AUDIT)
         with sub_tabs[3]:
-            st.markdown("#### Corporate Debt Holdings")
+            st.markdown("#### Corporate Debt Holdings Audit (Excel vs. PDF Published)")
             if s_master and s_master["corp_debt"]:
-                df_cd = pd.DataFrame(s_master["corp_debt"])
-                show_cd = df_cd[["Security Description", "Weight (%)", "Status"]]
-                styled_cd = apply_status_style(show_cd, "Status")
+                cd_rows = []
+                for item in s_master["corp_debt"]:
+                    sec_desc = item["Security Description"]
+                    excel_val = item["Raw Weight"]
+                    pdf_pct, diff_str, status_str = audit_pct_against_pdf(excel_val, pdf_text, tolerance)
+
+                    cd_rows.append({
+                        "Security Description": sec_desc,
+                        "Master Excel (%)": f"{excel_val:.2f}%",
+                        "PDF Published (%)": pdf_pct,
+                        "Difference (%)": diff_str,
+                        "Audit Status": status_str,
+                    })
+                df_cd = pd.DataFrame(cd_rows)
+                styled_cd = apply_status_style(df_cd, "Audit Status")
                 st.dataframe(styled_cd, use_container_width=True, hide_index=True)
             else:
                 st.info("No Corporate Debt instruments held in this scheme.")
 
-        # 5. Government Securities
+        # 5. Government Securities (LIVE EXCEL VS PDF CROSS-AUDIT)
         with sub_tabs[4]:
-            st.markdown("#### Government Securities Holdings (G-Sec / SDL / T-Bills)")
+            st.markdown("#### Government Securities Holdings Audit (Excel vs. PDF Published)")
             if s_master and s_master["g_sec"]:
-                df_gs = pd.DataFrame(s_master["g_sec"])
-                show_gs = df_gs[["Security Description", "Weight (%)", "Status"]]
-                styled_gs = apply_status_style(show_gs, "Status")
+                gs_rows = []
+                for item in s_master["g_sec"]:
+                    sec_desc = item["Security Description"]
+                    excel_val = item["Raw Weight"]
+                    pdf_pct, diff_str, status_str = audit_pct_against_pdf(excel_val, pdf_text, tolerance)
+
+                    gs_rows.append({
+                        "Security Description": sec_desc,
+                        "Master Excel (%)": f"{excel_val:.2f}%",
+                        "PDF Published (%)": pdf_pct,
+                        "Difference (%)": diff_str,
+                        "Audit Status": status_str,
+                    })
+                df_gs = pd.DataFrame(gs_rows)
+                styled_gs = apply_status_style(df_gs, "Audit Status")
                 st.dataframe(styled_gs, use_container_width=True, hide_index=True)
             else:
                 st.info("No Government Securities held in this scheme.")
 
-        # 6. Equity Holdings
+        # 6. Equity Holdings (LIVE EXCEL VS PDF CROSS-AUDIT)
         with sub_tabs[5]:
-            st.markdown("#### Equity Holdings (Top Equities)")
+            st.markdown("#### Equity Holdings Audit (Excel vs. PDF Published)")
             if s_master and s_master["equity"]:
-                df_eq = pd.DataFrame(s_master["equity"])
-                show_eq = df_eq[["Security Description", "Weight (%)", "Status"]]
-                styled_eq = apply_status_style(show_eq, "Status")
+                eq_rows = []
+                for item in s_master["equity"]:
+                    sec_desc = item["Security Description"]
+                    excel_val = item["Raw Weight"]
+                    pdf_pct, diff_str, status_str = audit_pct_against_pdf(excel_val, pdf_text, tolerance)
+
+                    eq_rows.append({
+                        "Security Description": sec_desc,
+                        "Master Excel (%)": f"{excel_val:.2f}%",
+                        "PDF Published (%)": pdf_pct,
+                        "Difference (%)": diff_str,
+                        "Audit Status": status_str,
+                    })
+                df_eq = pd.DataFrame(eq_rows)
+                styled_eq = apply_status_style(df_eq, "Audit Status")
                 st.dataframe(styled_eq, use_container_width=True, hide_index=True)
             else:
                 st.info("No Equity holdings held in this scheme (100% Debt / Liquid Fund).")
