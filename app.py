@@ -151,14 +151,28 @@ def norm_txt(s):
 
 
 # =============================================================
-# BLOCK 3: CONTEXTUAL LINE-BY-LINE PDF AUDIT HELPER
+# BLOCK 3: CONTEXTUAL LINE-BY-LINE PDF AUDIT HELPER (FIXED)
 # =============================================================
 def audit_line_item_against_pdf(item_name, excel_val, pdf_text, tolerance=0.05):
     if not pdf_text:
         return "N/A", "N/A", "PENDING PDF"
         
-    is_other_item = "OTHER" in str(item_name).upper()
+    clean_item_upper = str(item_name).upper().strip()
+    is_other_item = "OTHER" in clean_item_upper
     
+    # Helper: Check if line matches exact category of OTHER (Strict separation: Corporate vs Government)
+    def matches_other_category(line_str):
+        l_up = line_str.upper()
+        if "OTHER" not in l_up:
+            return False
+        if "CORPORATE" in clean_item_upper or "CORP" in clean_item_upper:
+            return ("CORPORATE" in l_up or "CORP" in l_up) and "GOVERNMENT" not in l_up and "G-SEC" not in l_up
+        elif "GOVERNMENT" in clean_item_upper or "G-SEC" in clean_item_upper or "GSEC" in clean_item_upper:
+            return ("GOVERNMENT" in l_up or "G-SEC" in l_up or "GSEC" in l_up or "GOI" in l_up) and "CORPORATE" not in l_up
+        elif "EQUITY" in clean_item_upper:
+            return "EQUITY" in l_up and "DEBT" not in l_up
+        return False
+
     # 1. Special Handling for 0.00% items (e.g. OTHER CORPORATE DEBT 0.00%)
     if abs(excel_val) < 0.001:
         clean_name = re.sub(r"[^A-Za-z0-9\s]", " ", str(item_name)).strip()
@@ -166,7 +180,7 @@ def audit_line_item_against_pdf(item_name, excel_val, pdf_text, tolerance=0.05):
         found_line = None
         for line in lines:
             if is_other_item:
-                if "OTHER" in line.upper() and any(k in line.upper() for k in ["DEBT", "SECURITIES", "EQUITY", "CORP"]):
+                if matches_other_category(line):
                     found_line = line.strip()
                     break
             elif clean_name.upper() in line.upper():
@@ -206,8 +220,11 @@ def audit_line_item_against_pdf(item_name, excel_val, pdf_text, tolerance=0.05):
         line_clean = line.strip()
         if not line_clean:
             continue
-        if is_other_item and "OTHER" not in line_clean.upper():
-            continue
+            
+        # Strict OTHER category check
+        if is_other_item:
+            if not matches_other_category(line_clean):
+                continue
             
         matches = sum(1 for w in words if re.search(r"\b" + re.escape(w) + r"\b", line_clean, re.IGNORECASE))
         if matches > max_matches and matches >= min(2, len(words)):
