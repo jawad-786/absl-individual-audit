@@ -151,7 +151,7 @@ def norm_txt(s):
 
 
 # =============================================================
-# BLOCK 3: CONTEXTUAL LINE-BY-LINE PDF AUDIT HELPER (LINE-LOCKED)
+# BLOCK 3: CONTEXTUAL LINE-BY-LINE PDF AUDIT HELPER (MULTI-LINE LOOKAHEAD)
 # =============================================================
 def audit_line_item_against_pdf(item_name, excel_val, pdf_text, tolerance=0.05):
     if not pdf_text:
@@ -159,7 +159,7 @@ def audit_line_item_against_pdf(item_name, excel_val, pdf_text, tolerance=0.05):
         
     clean_item_upper = str(item_name).upper().strip()
     
-    # 1. Residual OTHER check for Holdings (Corporate vs Government)
+    # Residual OTHER check for Holdings (Corporate vs Government)
     is_residual_other = (
         clean_item_upper.startswith("OTHER ") 
         and any(k in clean_item_upper for k in ["CORPORATE", "GOVERNMENT", "G-SEC"])
@@ -176,7 +176,7 @@ def audit_line_item_against_pdf(item_name, excel_val, pdf_text, tolerance=0.05):
             return ("GOVERNMENT" in l_up or "G-SEC" in l_up or "GSEC" in l_up or "GOI" in l_up) and "CORPORATE" not in l_up
         return False
 
-    # 2. Special Handling for 0.00% residual items
+    # 1. Special Handling for 0.00% residual items
     if abs(excel_val) < 0.001 and is_residual_other:
         lines = pdf_text.split("\n")
         found_line = None
@@ -198,7 +198,7 @@ def audit_line_item_against_pdf(item_name, excel_val, pdf_text, tolerance=0.05):
 
     lines = pdf_text.split("\n")
 
-    # 3. Precise Bond / G-Sec Holding Matcher (Using Coupon Rate & Maturity Date)
+    # 2. Precise Bond / G-Sec Holding Matcher (Using Coupon Rate & Maturity Date)
     m_coupon = re.search(r"(\d{1,2}\.\d{1,4})\s*%", item_name)
     coupon_str = m_coupon.group(1) if m_coupon else None
     
@@ -222,7 +222,7 @@ def audit_line_item_against_pdf(item_name, excel_val, pdf_text, tolerance=0.05):
                 best_line = line_clean
                 break
 
-    # 4. Line-by-line contextual search (For Sectors, Equities, Asset Allocation)
+    # 3. Line search with multi-line lookahead for wrapped InDesign table cells
     if not best_line:
         clean_name = re.sub(r"[^A-Za-z0-9\s]", " ", str(item_name)).strip()
         excluded_words = ["except", "from", "with", "than", "supply", "products", "activities", "compulsory", "social", "limited", "ltd"]
@@ -241,26 +241,38 @@ def audit_line_item_against_pdf(item_name, excel_val, pdf_text, tolerance=0.05):
             matches = sum(1 for w in words if re.search(r"\b" + re.escape(w) + r"\b", line_clean, re.IGNORECASE))
             if matches > max_matches and matches >= min(2, len(words)):
                 max_matches = matches
-                best_line = line_clean
-                if not re.search(r"\d+\.\d+", best_line) and idx + 1 < len(lines):
-                    best_line += " " + lines[idx + 1].strip()
+                # Multi-line lookahead: Peek ahead up to 3 lines to capture wrapped cell percentages
+                combined = line_clean
+                for k in range(1, 4):
+                    if re.search(r"\d{1,3}\.\d{1,2}", combined):
+                        break
+                    if idx + k < len(lines):
+                        combined += " " + lines[idx + k].strip()
+                best_line = combined
             elif len(words) == 1 and re.search(r"\b" + re.escape(words[0]) + r"\b", line_clean, re.IGNORECASE):
-                best_line = line_clean
-                if not re.search(r"\d+\.\d+", best_line) and idx + 1 < len(lines):
-                    best_line += " " + lines[idx + 1].strip()
+                combined = line_clean
+                for k in range(1, 4):
+                    if re.search(r"\d{1,3}\.\d{1,2}", combined):
+                        break
+                    if idx + k < len(lines):
+                        combined += " " + lines[idx + k].strip()
+                best_line = combined
                 break
 
     # MMI / Money Market alias support
     if not best_line and "MMI" in clean_item_upper:
         for idx, line in enumerate(lines):
             if "MONEY MARKET" in line.upper():
-                best_line = line.strip()
-                if not re.search(r"\d+\.\d+", best_line) and idx + 1 < len(lines):
-                    best_line += " " + lines[idx + 1].strip()
+                combined = line.strip()
+                for k in range(1, 4):
+                    if re.search(r"\d{1,3}\.\d{1,2}", combined):
+                        break
+                    if idx + k < len(lines):
+                        combined += " " + lines[idx + k].strip()
+                best_line = combined
                 break
 
-    # LINE-LOCKED VALUE EXTRACTION:
-    # Strictly extract the number from THIS line. NEVER scan random numbers across the page!
+    # LINE-LOCKED VALUE EXTRACTION (No stray numbers from across the page)
     if best_line:
         pcts_in_line = re.findall(r"(\d{1,3}\.\d{1,2})\s*%?", best_line)
         if pcts_in_line:
@@ -268,7 +280,6 @@ def audit_line_item_against_pdf(item_name, excel_val, pdf_text, tolerance=0.05):
             if len(pcts_in_line) > 1 and coupon_str and pcts_in_line[0] == coupon_str:
                 line_val = float(pcts_in_line[-1])
             elif len(pcts_in_line) > 1:
-                # If multiple numbers (e.g. range "20.18% 10%-20%"), pick closest to excel_val on this line
                 line_val = min([float(p) for p in pcts_in_line], key=lambda x: abs(x - excel_val))
             else:
                 line_val = float(pcts_in_line[0])
@@ -277,7 +288,7 @@ def audit_line_item_against_pdf(item_name, excel_val, pdf_text, tolerance=0.05):
             status = "PASS" if diff <= tolerance else f"MISMATCH ({diff:.2f}%)"
             return f"{line_val:.2f}%", f"{diff:.2f}%", status
 
-    # 5. Exact String Matching Fallback
+    # 4. InDesign table column stream matching
     val_2dec = f"{excel_val:.2f}"
     val_1dec = f"{excel_val:.1f}"
     patterns = [
