@@ -1,3 +1,6 @@
+# =============================================================
+# BLOCK 1: APP CONFIG & UI HEADER
+# =============================================================
 import io
 import re
 import openpyxl
@@ -5,9 +8,6 @@ import pandas as pd
 import pypdf
 import streamlit as st
 
-# =============================================================
-# BLOCK 1: APP CONFIG & UI HEADER
-# =============================================================
 st.set_page_config(
     page_title="ABSLI Fund Factsheet Audit Engine",
     page_icon="🛡️",
@@ -164,7 +164,7 @@ def audit_line_item_against_pdf(item_name, excel_val, pdf_text, tolerance=0.05):
         "except", "other", "from", "with", "than", "supply", "products", "activities", "compulsory", "social", "limited", "ltd"
     ]]
     
-    # 1. Row-by-Row Search (Name aur Number ek hi line ya agal-bagal lines par)
+    # 1. Line-by-line contextual search
     best_line = None
     max_matches = 0
     lines = pdf_text.split("\n")
@@ -208,7 +208,7 @@ def audit_line_item_against_pdf(item_name, excel_val, pdf_text, tolerance=0.05):
             elif closest_cand is not None and min_d <= 2.0:
                 return f"{closest_cand:.2f}%", f"{min_d:.2f}%", f"MISMATCH ({min_d:.2f}%)"
 
-    # 2. Table-Column Stream Search (InDesign split text: 20.18%, 20.18 %, ya plain 20.18)
+    # 2. InDesign table column stream matching (20.18%, 20.18 %, plain 20.18)
     patterns = [
         rf"\b{re.escape(val_2dec)}\s*%",
         rf"\b{re.escape(val_2dec)}\b",
@@ -267,7 +267,7 @@ def extract_pdf_data(pdf_bytes):
         for page_idx, page in enumerate(reader.pages):
             text = page.extract_text() or ""
             
-            # Strict IRDAI SFIN matching (Must end in 109, drops trailing text like "ABOUTTHEFUND")
+            # Clean IRDAI SFIN matching (Must end in 109, drops trailing text)
             clean_sfins = re.findall(r"(?:ULIF|ULGF)\d{3}\d{2}/\d{2}/\d{2}[A-Za-z0-9]+?109", text)
             if not clean_sfins:
                 clean_sfins = re.findall(r"(?:ULIF|ULGF)[A-Za-z0-9/]+?109", text)
@@ -275,10 +275,28 @@ def extract_pdf_data(pdf_bytes):
             if not clean_sfins:
                 continue
 
-            is_dedicated = len(set(clean_sfins)) <= 3 or "SECTORAL ALLOCATION" in text.upper() or "PORTFOLIO" in text.upper()
+            unique_sfins = set(clean_sfins)
+            
+            # True Dedicated Page Detector: Rejects summary pages with 30-40 SFINs
+            has_detail_sections = any(sec in text.upper() for sec in [
+                "ASSET ALLOCATION", "SECTORAL ALLOCATION", "ABOUT THE FUND", 
+                "FUND MANAGER", "RATING PROFILE", "HOLDINGS"
+            ])
+            is_true_dedicated = (len(unique_sfins) <= 2) and has_detail_sections
 
+            # NAV Candidate extraction
             nav_candidates = re.findall(r"\b\d{1,3}\.\d{4}\b", text)
-            aum_candidates = re.findall(r"([\d\.]+)\s*Cr", text)
+
+            # Robust AUM Extraction: Targets "Asset held as on ... ₹ 174.73 Cr" (Prevents 109 footer bug)
+            aum_val = None
+            m_aum_line = re.search(r"(?:Asset\s+held|AUM|Assets?\s+under\s+Management).*?[₹\s]+([0-9,]+\.[0-9]{1,2})\s*(?:Cr|Crores)\b", text, re.IGNORECASE)
+            if m_aum_line:
+                aum_val = float(m_aum_line.group(1).replace(",", ""))
+            else:
+                m_cr_tokens = re.findall(r"\b([0-9,]+\.[0-9]{1,2})\s*Cr\b", text, re.IGNORECASE)
+                valid_aums = [float(x.replace(",", "")) for x in m_cr_tokens if float(x.replace(",", "")) != 109.0]
+                if valid_aums:
+                    aum_val = valid_aums[0]
 
             fm_match = re.search(r"FUND\s+MANAGER:\s*([^\r\n]+)", text, re.IGNORECASE)
             fm_val = fm_match.group(1).strip() if fm_match else ""
@@ -295,18 +313,31 @@ def extract_pdf_data(pdf_bytes):
                         header_fund_name = clean_line
                         break
 
-            for sfin in set(clean_sfins):
+            for sfin in unique_sfins:
                 best_name = header_fund_name or BUILTIN_SCHEME_NAMES.get(sfin) or f"Scheme ({sfin})"
+                prev_info = schemes_pdf.get(sfin)
 
-                if sfin not in schemes_pdf or (is_dedicated and not schemes_pdf[sfin].get("is_dedicated", False)):
+                should_update = False
+                if prev_info is None:
+                    should_update = True
+                elif is_true_dedicated and not prev_info.get("is_true_dedicated", False):
+                    should_update = True
+                elif is_true_dedicated and prev_info.get("is_true_dedicated", False):
+                    # Multi-page combination: Merge pages if scheme spans across 2 pages
+                    prev_info["page_text"] += "\n" + text
+                    if aum_val and not prev_info.get("aum_val"):
+                        prev_info["aum_val"] = aum_val
+                    continue
+
+                if should_update:
                     schemes_pdf[sfin] = {
                         "page": page_idx + 1,
                         "sfin": sfin,
                         "fund_name": best_name,
                         "page_text": text,
-                        "is_dedicated": is_dedicated,
+                        "is_true_dedicated": is_true_dedicated,
                         "nav_candidates": [float(n) for n in nav_candidates],
-                        "aum_candidates": [float(a) for a in aum_candidates],
+                        "aum_val": aum_val,
                         "fund_manager": fm_val,
                         "ytm": float(ytm_match.group(1)) if ytm_match else None,
                         "mod_duration": float(dur_match.group(1)) if dur_match else None,
@@ -831,10 +862,9 @@ with tabs[1]:
             fname = nav_data.get(sfin, {}).get("name") or BUILTIN_SCHEME_NAMES.get(sfin) or pdf_data.get(sfin, {}).get("fund_name") or sfin
             ftype = "Individual (ULIF)" if sfin.startswith("ULIF") else "Group (ULGF)"
 
-            pdf_aum_val = None
+            # Targets exact AUM from dedicated page
             p_info = pdf_data.get(sfin)
-            if p_info and p_info["aum_candidates"]:
-                pdf_aum_val = p_info["aum_candidates"][-1]
+            pdf_aum_val = p_info.get("aum_val") if p_info else None
 
             matched_code, excel_aum_val = get_exact_aum_for_sfin(sfin, fname, aum_data)
 
@@ -909,7 +939,7 @@ with tabs[2]:
         with nav_col2:
             chosen_sfin = st.selectbox("Select Scheme to Inspect:", options=sorted_sfins, key="scheme_selector_key", format_func=lambda x: available_schemes[x])
 
-        # Smart SFIN Matcher between PDF and Master Excel (Fixes 'Upload Master Factsheet' bug)
+        # Smart Record Matcher between PDF and Master Excel
         def get_master_record(target_sfin, master_dict):
             if not master_dict or not target_sfin:
                 return None
@@ -923,7 +953,7 @@ with tabs[2]:
             return None
 
         s_master = get_master_record(chosen_sfin, master_data)
-        pdf_info = pdf_data.get(chosen_sfin, None)
+        pdf_info = get_master_record(chosen_sfin, pdf_data)
         pdf_text = pdf_info["page_text"] if pdf_info else ""
         sheet_key = s_master["sheet_name"] if s_master else ""
 
@@ -1163,7 +1193,8 @@ with tabs[2]:
                     found_code = None
                     excel_aum_val = None
 
-            pdf_aum_val = pdf_info["aum_candidates"][-1] if (pdf_info and pdf_info["aum_candidates"]) else None
+            # Pulls exact AUM extracted from dedicated page
+            pdf_aum_val = pdf_info.get("aum_val") if pdf_info else None
 
             m_c1, m_c2, m_c3 = st.columns(3)
             m_c1.metric("PDF Published AUM", f"{pdf_aum_val:.2f} Cr" if pdf_aum_val else "N/A")
