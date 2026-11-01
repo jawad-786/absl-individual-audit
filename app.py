@@ -157,14 +157,48 @@ def audit_line_item_against_pdf(item_name, excel_val, pdf_text, tolerance=0.05):
     if not pdf_text:
         return "N/A", "N/A", "PENDING PDF"
         
+    is_other_item = "OTHER" in str(item_name).upper()
+    
+    # 1. Special Handling for 0.00% items (e.g. OTHER CORPORATE DEBT 0.00%)
+    if abs(excel_val) < 0.001:
+        clean_name = re.sub(r"[^A-Za-z0-9\s]", " ", str(item_name)).strip()
+        lines = pdf_text.split("\n")
+        found_line = None
+        for line in lines:
+            if is_other_item:
+                if "OTHER" in line.upper() and any(k in line.upper() for k in ["DEBT", "SECURITIES", "EQUITY", "CORP"]):
+                    found_line = line.strip()
+                    break
+            elif clean_name.upper() in line.upper():
+                found_line = line.strip()
+                break
+                
+        if found_line:
+            pcts = re.findall(r"(\d{1,3}\.\d{1,2})\s*%?", found_line)
+            if pcts:
+                val = float(pcts[-1])
+                diff = abs(val - excel_val)
+                status = "PASS" if diff <= tolerance else f"MISMATCH ({diff:.2f}%)"
+                return f"{val:.2f}%", f"{diff:.2f}%", status
+            return "0.00%", "0.00%", "PASS"
+            
+        # In InDesign factsheets, if residual holding is 0.00%, it is omitted from print
+        if is_other_item:
+            return "0.00%", "0.00%", "PASS"
+        else:
+            return "NOT IN PDF", "N/A", "MISMATCH (NOT IN PDF)"
+
     val_2dec = f"{excel_val:.2f}"
     val_1dec = f"{excel_val:.1f}"
     clean_name = re.sub(r"[^A-Za-z0-9\s]", " ", str(item_name)).strip()
-    words = [w for w in clean_name.split() if len(w) >= 3 and w.lower() not in [
-        "except", "other", "from", "with", "than", "supply", "products", "activities", "compulsory", "social", "limited", "ltd"
-    ]]
     
-    # 1. Line-by-line contextual search
+    excluded_words = ["except", "from", "with", "than", "supply", "products", "activities", "compulsory", "social", "limited", "ltd"]
+    if not is_other_item:
+        excluded_words.append("other")
+        
+    words = [w for w in clean_name.split() if len(w) >= 3 and w.lower() not in excluded_words]
+    
+    # 2. Line-by-line contextual search
     best_line = None
     max_matches = 0
     lines = pdf_text.split("\n")
@@ -172,6 +206,9 @@ def audit_line_item_against_pdf(item_name, excel_val, pdf_text, tolerance=0.05):
         line_clean = line.strip()
         if not line_clean:
             continue
+        if is_other_item and "OTHER" not in line_clean.upper():
+            continue
+            
         matches = sum(1 for w in words if re.search(r"\b" + re.escape(w) + r"\b", line_clean, re.IGNORECASE))
         if matches > max_matches and matches >= min(2, len(words)):
             max_matches = matches
@@ -208,7 +245,7 @@ def audit_line_item_against_pdf(item_name, excel_val, pdf_text, tolerance=0.05):
             elif closest_cand is not None and min_d <= 2.0:
                 return f"{closest_cand:.2f}%", f"{min_d:.2f}%", f"MISMATCH ({min_d:.2f}%)"
 
-    # 2. InDesign table column stream matching (20.18%, 20.18 %, plain 20.18)
+    # 3. InDesign table column stream matching
     patterns = [
         rf"\b{re.escape(val_2dec)}\s*%",
         rf"\b{re.escape(val_2dec)}\b",
@@ -222,24 +259,25 @@ def audit_line_item_against_pdf(item_name, excel_val, pdf_text, tolerance=0.05):
                 found_str += "%"
             return found_str, "0.00%", "PASS"
 
-    # 3. Numeric Proximity Matcher
-    all_numbers = re.findall(r"\b(\d{1,3}\.\d{1,2})\b", pdf_text)
-    closest = None
-    min_diff = 999.0
-    for num_s in all_numbers:
-        try:
-            n_val = float(num_s)
-            d = abs(n_val - excel_val)
-            if d < min_diff:
-                min_diff = d
-                closest = n_val
-        except:
-            pass
+    # 4. Numeric Proximity Matcher (Only for values > 0.5% and NOT for OTHER items)
+    if excel_val > 0.5 and not is_other_item:
+        all_numbers = re.findall(r"\b(\d{1,3}\.\d{1,2})\b", pdf_text)
+        closest = None
+        min_diff = 999.0
+        for num_s in all_numbers:
+            try:
+                n_val = float(num_s)
+                d = abs(n_val - excel_val)
+                if d < min_diff:
+                    min_diff = d
+                    closest = n_val
+            except:
+                pass
 
-    if closest is not None and min_diff <= tolerance:
-        return f"{closest:.2f}%", f"{min_diff:.2f}%", "PASS"
-    elif closest is not None and min_diff <= 1.5:
-        return f"{closest:.2f}%", f"{min_diff:.2f}%", f"MISMATCH ({min_diff:.2f}%)"
+        if closest is not None and min_diff <= tolerance:
+            return f"{closest:.2f}%", f"{min_diff:.2f}%", "PASS"
+        elif closest is not None and min_diff <= 1.5:
+            return f"{closest:.2f}%", f"{min_diff:.2f}%", f"MISMATCH ({min_diff:.2f}%)"
 
     return "NOT IN PDF", "N/A", "MISMATCH (NOT IN PDF)"
 
