@@ -1137,6 +1137,37 @@ with tabs[2]:
             else:
                 st.info("Upload Master Factsheet Excel to view Asset Allocation compliance.")
 
+                # Dynamic 100.00% TOTAL Row
+                if alloc_rows:
+                    pdf_total_str = f"{total_pdf_val:.2f}%" if has_pdf_values else "N/A"
+                    total_diff = abs(total_excel_val - total_pdf_val) if has_pdf_values else 0.0
+                    total_diff_str = f"{total_diff:.2f}%" if has_pdf_values else "N/A"
+
+                    is_excel_100 = abs(total_excel_val - 100.00) <= 0.05
+                    is_pdf_100 = has_pdf_values and (abs(total_pdf_val - 100.00) <= 0.05)
+
+                    if not has_pdf_values:
+                        total_status = "PENDING PDF"
+                    elif is_excel_100 and is_pdf_100:
+                        total_status = "PASS"
+                    else:
+                        total_status = f"MISMATCH (TOTAL {total_pdf_val:.2f}%)"
+
+                    alloc_rows.append({
+                        "Asset Category": "📌 TOTAL",
+                        "Master Excel (%)": f"{total_excel_val:.2f}%",
+                        "PDF Published (%)": pdf_total_str,
+                        "Difference (%)": total_diff_str,
+                        "Defined Mandate Range": "100.00%",
+                        "Audit Status": total_status,
+                    })
+
+                df_a = pd.DataFrame(alloc_rows)
+                styled_a = apply_status_style(df_a, "Audit Status")
+                st.dataframe(styled_a, use_container_width=True, hide_index=True)
+            else:
+                st.info("Upload Master Factsheet Excel to view Asset Allocation compliance.")
+
         # --- SUB-TAB 2: RATING PROFILE (LIVE 4-COLUMN AUDIT) ---
         with sub_tabs[1]:
             st.markdown("#### Credit Rating Profile Audit (Excel vs. PDF Published)")
