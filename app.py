@@ -214,70 +214,95 @@ with st.sidebar:
 # -------------------------------------------------------------
 @st.cache_data(show_spinner=False)
 def extract_pdf_data(pdf_bytes):
-    schemes_pdf = {}
-    if not pdf_bytes:
-        return schemes_pdf
-    try:
-        reader = pypdf.PdfReader(io.BytesIO(pdf_bytes))
-        for page_idx, page in enumerate(reader.pages):
-            text = page.extract_text() or ""
-            raw_sfins = re.findall(r"(?:ULIF|ULGF)[\s\d/A-Za-z]{10,40}", text, re.IGNORECASE)
-            clean_sfins = []
-            for r_s in raw_sfins:
-                norm_s = re.sub(r"[\s]", "", r_s).upper()
-                m_s = re.search(r"(?:ULIF|ULGF)[A-Za-z0-9/]{10,35}", norm_s)
-                if m_s:
-                    clean_sfins.append(m_s.group(0))
-
-            if not clean_sfins:
-                continue
-
-            is_dedicated = len(set(clean_sfins)) <= 3 or "SECTORAL ALLOCATION" in text.upper() or "PORTFOLIO" in text.upper()
-
-            nav_candidates = re.findall(r"\b\d{1,3}\.\d{4}\b", text)
-            aum_candidates = re.findall(r"([\d\.]+)\s*Cr", text)
-
-            fm_match = re.search(r"FUND\s+MANAGER:\s*([^\r\n]+)", text, re.IGNORECASE)
-            fm_val = fm_match.group(1).strip() if fm_match else ""
-
-            ytm_match = re.search(r"Yield\s+to\s+Maturity\s*\|?\s*([\d\.]+)%", text, re.IGNORECASE)
-            dur_match = re.search(r"Modified\s+Duration\s*\|?\s*([\d\.]+)", text, re.IGNORECASE)
-
-            header_fund_name = None
-            for line in text.split("\n")[:10]:
-                if any(s in line for s in clean_sfins):
-                    clean_line = re.sub(r"SFIN\s*No\.?\s*:?.*", "", line, flags=re.IGNORECASE).strip()
-                    clean_line = re.sub(r"(?:ULIF|ULGF)[A-Za-z0-9/\s]{10,40}", "", clean_line).strip()
-                    if clean_line and len(clean_line) > 3 and clean_line.upper() not in ["EQUITY", "CORPORATE DEBT", "TOTAL", "SECURITIES"]:
-                        header_fund_name = clean_line
-                        break
-
-            for sfin in set(clean_sfins):
-                best_name = header_fund_name or BUILTIN_SCHEME_NAMES.get(sfin) or f"Scheme ({sfin})"
-
-                if sfin not in schemes_pdf or (is_dedicated and not schemes_pdf[sfin].get("is_dedicated", False)):
-                    schemes_pdf[sfin] = {
-                        "page": page_idx + 1,
-                        "sfin": sfin,
-                        "fund_name": best_name,
-                        "page_text": text,
-                        "is_dedicated": is_dedicated,
-                        "nav_candidates": [float(n) for n in nav_candidates],
-                        "aum_candidates": [float(a) for a in aum_candidates],
-                        "fund_manager": fm_val,
-                        "ytm": float(ytm_match.group(1)) if ytm_match else None,
-                        "mod_duration": float(dur_match.group(1)) if dur_match else None,
-                    }
-    except Exception as e:
-        st.sidebar.error(f"Error reading PDF: {e}")
+  schemes_pdf = {}
+  if not pdf_bytes:
     return schemes_pdf
+  try:
+    reader = pypdf.PdfReader(io.BytesIO(pdf_bytes))
+    for page_idx, page in enumerate(reader.pages):
+      text = page.extract_text() or ""
+
+      # Strict IRDAI SFIN matching (Must end in 109, drops "ABOUTTHEFUND")
+      clean_sfins = re.findall(
+          r"(?:ULIF|ULGF)\d{3}\d{2}/\d{2}/\d{2}[A-Za-z0-9]+?109", text
+      )
+      if not clean_sfins:
+        clean_sfins = re.findall(r"(?:ULIF|ULGF)[A-Za-z0-9/]+?109", text)
+
+      if not clean_sfins:
+        continue
+
+      is_dedicated = (
+          len(set(clean_sfins)) <= 3
+          or "SECTORAL ALLOCATION" in text.upper()
+          or "PORTFOLIO" in text.upper()
+      )
+
+      nav_candidates = re.findall(r"\b\d{1,3}\.\d{4}\b", text)
+      aum_candidates = re.findall(r"([\d\.]+)\s*Cr", text)
+
+      fm_match = re.search(r"FUND\s+MANAGER:\s*([^\r\n]+)", text, re.IGNORECASE)
+      fm_val = fm_match.group(1).strip() if fm_match else ""
+
+      ytm_match = re.search(
+          r"Yield\s+to\s+Maturity\s*\|?\s*([\d\.]+)%", text, re.IGNORECASE
+      )
+      dur_match = re.search(
+          r"Modified\s+Duration\s*\|?\s*([\d\.]+)", text, re.IGNORECASE
+      )
+
+      header_fund_name = None
+      for line in text.split("\n")[:10]:
+        if any(s in line for s in clean_sfins):
+          clean_line = re.sub(
+              r"SFIN\s*No\.?\s*:?.*", "", line, flags=re.IGNORECASE
+          ).strip()
+          clean_line = re.sub(
+              r"(?:ULIF|ULGF)[A-Za-z0-9/\s]{10,40}", "", clean_line
+          ).strip()
+          if (
+              clean_line
+              and len(clean_line) > 3
+              and clean_line.upper()
+              not in ["EQUITY", "CORPORATE DEBT", "TOTAL", "SECURITIES"]
+          ):
+            header_fund_name = clean_line
+            break
+
+      for sfin in set(clean_sfins):
+        best_name = (
+            header_fund_name
+            or BUILTIN_SCHEME_NAMES.get(sfin)
+            or f"Scheme ({sfin})"
+        )
+
+        if sfin not in schemes_pdf or (
+            is_dedicated and not schemes_pdf[sfin].get("is_dedicated", False)
+        ):
+          schemes_pdf[sfin] = {
+              "page": page_idx + 1,
+              "sfin": sfin,
+              "fund_name": best_name,
+              "page_text": text,
+              "is_dedicated": is_dedicated,
+              "nav_candidates": [float(n) for n in nav_candidates],
+              "aum_candidates": [float(a) for a in aum_candidates],
+              "fund_manager": fm_val,
+              "ytm": float(ytm_match.group(1)) if ytm_match else None,
+              "mod_duration": float(dur_match.group(1)) if dur_match else None,
+          }
+  except Exception as e:
+    st.sidebar.error(f"Error reading PDF: {e}")
+  return schemes_pdf
 
 # -------------------------------------------------------------
 # EXCEL PARSER (Master Sheets with Exact Individual/Group Separation)
 # -------------------------------------------------------------
 SHEET_NAME_TO_SFIN = {
-    "INC-ADV-FUND": "ULIF01507/08/08BSLIINCADV109", # Individual Income Advantage Fund
-    "GR-INC-ADV": "ULGF01425/02/10BSLGINCADV109",   # Group Income Advantage Fund
+    # Income Advantage Funds (Exact Separation)
+    "INC-ADV-FUND": "ULIF01507/08/08BSLIINCADV109",  # Individual Income Advantage Fund
+    "GR-INC-ADV": "ULGF01425/02/10BSLGINCADV109",  # Group Income Advantage Fund
+    # Group Funds (ULGF)
     "GR-GROWTH": "ULGF00112/06/01BSLGGROWTH109",
     "GR-PROTECTOR": "ULGF00212/06/01BSLGSECURE109",
     "GR-STABLE": "ULGF00312/06/01BSLGSTABLE109",
@@ -287,6 +312,7 @@ SHEET_NAME_TO_SFIN = {
     "GR-MMFUND": "ULGF00824/08/04BSLIGRMMKT109",
     "GR-ADVANTAGE": "ULGF01026/11/07BSLIGGRADV109",
     "GR-DEBTFUND": "ULGF01322/09/08BSLGSHTDBT109",
+    # Individual & Pension Funds (ULIF)
     "IND-BUILDER": "ULIF00113/03/01BSLBUILDER109",
     "IND-ENHANCER": "ULIF00213/03/01BSLENHANCE109",
     "INDPROTECTOR": "ULIF00313/03/01BSLPROTECT109",
@@ -318,76 +344,377 @@ SHEET_NAME_TO_SFIN = {
     "INDFLEXICAP": "ULIF04312/02/26ABSLFLXCAP109",
 }
 
+
 @st.cache_data(show_spinner=False)
 def parse_master_sheets(master_bytes):
-    if not master_bytes:
-        return {}
-    parsed = {}
-    try:
-        wb = openpyxl.load_workbook(io.BytesIO(master_bytes), data_only=True)
-        for sheet_name in wb.sheetnames:
-            ws = wb[sheet_name]
-            fund_name = None
-            sfin = SHEET_NAME_TO_SFIN.get(sheet_name.strip().upper())
+  if not master_bytes:
+    return {}
+  parsed = {}
+  try:
+    wb = openpyxl.load_workbook(io.BytesIO(master_bytes), data_only=True)
+    for sheet_name in wb.sheetnames:
+      ws = wb[sheet_name]
+      fund_name = None
+      sfin = SHEET_NAME_TO_SFIN.get(sheet_name.strip().upper())
 
-            for r in range(1, 30):
-                for c in range(1, 25):
-                    val = ws.cell(r, c).value
-                    if val and isinstance(val, str):
-                        val_str = val.strip()
-                        if ("ULIF" in val_str or "ULGF" in val_str) and not sfin:
-                            m_sfin = re.search(r"(?:ULIF|ULGF)[A-Za-z0-9/]{10,35}", val_str)
-                            if m_sfin:
-                                sfin = m_sfin.group(0).strip()
-                        if (
-                            not fund_name
-                            and any(k in val_str.upper() for k in ["FUND", "BOND", "SECURE", "STABLE", "GROWTH", "INDEX"])
-                            and val_str.strip().upper() not in ["EQUITY", "CORPORATE DEBT", "GOVERNMENT SECURITIES", "TOTAL", "MMI", "SECURITIES"]
-                        ):
-                            if len(val_str) < 60 and not val_str.startswith("UL"):
-                                fund_name = val_str
+      for r in range(1, 30):
+        for c in range(1, 25):
+          val = ws.cell(r, c).value
+          if val and isinstance(val, str):
+            val_str = val.strip()
+            if ("ULIF" in val_str or "ULGF" in val_str) and not sfin:
+              m_sfin = re.search(
+                  r"(?:ULIF|ULGF)\d{3}\d{2}/\d{2}/\d{2}[A-Za-z0-9]+?109",
+                  val_str,
+              )
+              if not m_sfin:
+                m_sfin = re.search(r"(?:ULIF|ULGF)[A-Za-z0-9/]+?109", val_str)
+              if m_sfin:
+                sfin = m_sfin.group(0).strip()
+            if (
+                not fund_name
+                and any(
+                    k in val_str.upper()
+                    for k in [
+                        "FUND",
+                        "BOND",
+                        "SECURE",
+                        "STABLE",
+                        "GROWTH",
+                        "INDEX",
+                    ]
+                )
+                and val_str.strip().upper()
+                not in [
+                    "EQUITY",
+                    "CORPORATE DEBT",
+                    "GOVERNMENT SECURITIES",
+                    "TOTAL",
+                    "MMI",
+                    "SECURITIES",
+                ]
+            ):
+              if len(val_str) < 60 and not val_str.startswith("UL"):
+                fund_name = val_str
 
-            if not sfin:
-                m_sheet = re.search(r"(?:ULIF|ULGF)[A-Za-z0-9/]{10,35}", sheet_name)
-                if m_sheet:
-                    sfin = m_sheet.group(0).strip()
-                elif len(wb.sheetnames) > 3:
-                    sfin = sheet_name.strip()
+      if not sfin:
+        m_sheet = re.search(
+            r"(?:ULIF|ULGF)\d{3}\d{2}/\d{2}/\d{2}[A-Za-z0-9]+?109", sheet_name
+        )
+        if m_sheet:
+          sfin = m_sheet.group(0).strip()
+        elif len(wb.sheetnames) > 3:
+          sfin = sheet_name.strip()
 
-            if not sfin:
-                continue
+      if not sfin:
+        continue
 
-            if not fund_name or fund_name.upper() in ["EQUITY", "CORPORATE DEBT", "TOTAL"]:
-                fund_name = BUILTIN_SCHEME_NAMES.get(sfin) or ws.cell(2, 3).value or sheet_name
+      if not fund_name or fund_name.upper() in [
+          "EQUITY",
+          "CORPORATE DEBT",
+          "TOTAL",
+      ]:
+        fund_name = (
+            BUILTIN_SCHEME_NAMES.get(sfin) or ws.cell(2, 3).value or sheet_name
+        )
 
-            # 1. Asset Allocation
-            asset_alloc = []
-            seen_cats = set()
-            for r in range(6, 25):
-                for c in range(5, 12):
-                    cat = ws.cell(r, c).value
-                    if cat and isinstance(cat, str):
-                        cat_str = cat.strip()
-                        cat_upper = cat_str.upper()
-                        if any(x in cat_upper for x in ["IN RS", "CRORES", "TOTAL", "ASSET CATEGORY", "ASSET ALLOCATION"]):
-                            continue
-                        if any(ac in cat_upper for ac in ["EQUITY", "DEBT", "GOVERNMENT", "CORPORATE", "MMI", "OTHER"]):
-                            actual = ws.cell(r, c + 1).value
-                            rng = ws.cell(r, c + 2).value
-                            if actual is not None and cat_upper not in seen_cats:
-                                try:
-                                    act_val = float(actual)
-                                    pct = act_val * 100 if act_val <= 1.0 else act_val
-                                    seen_cats.add(cat_upper)
-                                    asset_alloc.append({
-                                        "Asset Category": cat_str,
-                                        "Actual (%)": f"{pct:.2f}%",
-                                        "Raw Actual": round(pct, 2),
-                                        "Defined Mandate Range": str(rng) if rng else "N/A",
-                                    })
-                                except:
-                                    pass
-                            break
+      # 1. Asset Allocation
+      asset_alloc = []
+      seen_cats = set()
+      for r in range(6, 25):
+        for c in range(5, 12):
+          cat = ws.cell(r, c).value
+          if cat and isinstance(cat, str):
+            cat_str = cat.strip()
+            cat_upper = cat_str.upper()
+            if any(
+                x in cat_upper
+                for x in [
+                    "IN RS",
+                    "CRORES",
+                    "TOTAL",
+                    "ASSET CATEGORY",
+                    "ASSET ALLOCATION",
+                ]
+            ):
+              continue
+            if any(
+                ac in cat_upper
+                for ac in [
+                    "EQUITY",
+                    "DEBT",
+                    "GOVERNMENT",
+                    "CORPORATE",
+                    "MMI",
+                    "OTHER",
+                ]
+            ):
+              actual = ws.cell(r, c + 1).value
+              rng = ws.cell(r, c + 2).value
+              if actual is not None and cat_upper not in seen_cats:
+                try:
+                  act_val = float(actual)
+                  pct = act_val * 100 if act_val <= 1.0 else act_val
+                  seen_cats.add(cat_upper)
+                  asset_alloc.append({
+                      "Asset Category": cat_str,
+                      "Actual (%)": f"{pct:.2f}%",
+                      "Raw Actual": round(pct, 2),
+                      "Defined Mandate Range": str(rng) if rng else "N/A",
+                  })
+                except:
+                  pass
+              break
+
+      # 2. Universal Rating Profile Scanner
+      ratings = []
+      seen_ratings = set()
+      for r in range(1, 15):
+        rat = ws.cell(r, 18).value
+        pct = ws.cell(r, 19).value
+        if (
+            rat
+            and pct is not None
+            and str(rat).strip().upper()
+            in [
+                "AAA",
+                "SOV",
+                "SOVEREIGN",
+                "AA+",
+                "AA",
+                "A1+",
+                "AA-",
+                "A+",
+                "P1+",
+                "AAA(SO)",
+                "UNRATED",
+            ]
+        ):
+          try:
+            p_float = float(pct)
+            p_val = p_float * 100 if p_float <= 1.0 else p_float
+            r_name = str(rat).strip().upper()
+            if r_name not in seen_ratings:
+              seen_ratings.add(r_name)
+              ratings.append({
+                  "Rating": r_name,
+                  "Weight (%)": f"{p_val:.2f}%",
+                  "Raw Weight": round(p_val, 2),
+              })
+          except:
+            pass
+
+      if not ratings:
+        target_codes = [
+            "AAA",
+            "SOV",
+            "SOVEREIGN",
+            "AA+",
+            "AA",
+            "A1+",
+            "AA-",
+            "A+",
+            "P1+",
+            "AAA(SO)",
+            "UNRATED",
+        ]
+        for r in range(1, min(70, ws.max_row + 1)):
+          for c in range(1, min(30, ws.max_column + 1)):
+            val = ws.cell(r, c).value
+            if val and isinstance(val, str):
+              v_clean = val.strip().upper()
+              if v_clean in target_codes and v_clean not in seen_ratings:
+                for dc in [1, 2, -1]:
+                  v_num = ws.cell(r, c + dc).value
+                  if (
+                      v_num is not None
+                      and isinstance(v_num, (int, float))
+                      and 0 < float(v_num) <= 100
+                  ):
+                    p_val = float(v_num) * 100 if float(v_num) <= 1.0 else float(v_num)
+                    seen_ratings.add(v_clean)
+                    ratings.append({
+                        "Rating": v_clean,
+                        "Weight (%)": f"{p_val:.2f}%",
+                        "Raw Weight": round(p_val, 2),
+                    })
+                    break
+
+      # 3. Sector Allocation
+      sectors = []
+      for r in range(25, 60):
+        for c in range(5, 10):
+          sec_name = ws.cell(r, c).value
+          if (
+              sec_name
+              and len(str(sec_name).strip()) > 3
+              and str(sec_name).strip() != "Sectoral Allocation"
+          ):
+            for dc in [1, 2]:
+              sec_pct = ws.cell(r, c + dc).value
+              if (
+                  sec_pct
+                  and isinstance(sec_pct, (int, float))
+                  and 0 < float(sec_pct) <= 100
+              ):
+                s_val = (
+                    float(sec_pct) * 100
+                    if float(sec_pct) <= 1.0
+                    else float(sec_pct)
+                )
+                sectors.append({
+                    "Sector Name": str(sec_name).strip(),
+                    "Weight (%)": f"{s_val:.2f}%",
+                    "Raw Weight": round(s_val, 2),
+                })
+                break
+            break
+
+      # 4. Line Holdings (Captures Heading Totals + Individual Items)
+      corp_debt, g_sec, equity = [], [], []
+      curr_sec = None
+      for r in range(5, 95):
+        name_cell = ws.cell(r, 3).value
+        wt_cell = ws.cell(r, 4).value
+        if not name_cell:
+          continue
+        item_str = str(name_cell).strip()
+        item_upper = item_str.upper()
+
+        if item_upper == "CORPORATE DEBT":
+          curr_sec = "corp"
+          if wt_cell is not None:
+            try:
+              w_num = float(wt_cell)
+              w_pct = w_num * 100 if w_num <= 1.0 else w_num
+              corp_debt.append({
+                  "Security Description": "📌 CORPORATE DEBT (HEADING TOTAL)",
+                  "Weight (%)": f"{w_pct:.2f}%",
+                  "Raw Weight": round(w_pct, 2),
+              })
+            except:
+              pass
+          continue
+        elif item_upper in [
+            "GOVERNMENT SECURITIES",
+            "CENTRAL GOVERNMENT SECURITIES",
+        ]:
+          curr_sec = "gsec"
+          if wt_cell is not None:
+            try:
+              w_num = float(wt_cell)
+              w_pct = w_num * 100 if w_num <= 1.0 else w_num
+              g_sec.append({
+                  "Security Description": (
+                      "📌 GOVERNMENT SECURITIES (HEADING TOTAL)"
+                  ),
+                  "Weight (%)": f"{w_pct:.2f}%",
+                  "Raw Weight": round(w_pct, 2),
+              })
+            except:
+              pass
+          continue
+        elif item_upper == "EQUITY":
+          curr_sec = "equity"
+          if wt_cell is not None:
+            try:
+              w_num = float(wt_cell)
+              w_pct = w_num * 100 if w_num <= 1.0 else w_num
+              equity.append({
+                  "Security Description": "📌 EQUITY (HEADING TOTAL)",
+                  "Weight (%)": f"{w_pct:.2f}%",
+                  "Raw Weight": round(w_pct, 2),
+              })
+            except:
+              pass
+          continue
+        elif item_upper in [
+            "MMI",
+            "TOTAL",
+            "SECURITISED DEBT",
+            "OTHER SECURITISED DEBT",
+            "SECURITIES",
+        ]:
+          curr_sec = None
+          continue
+
+        if curr_sec and wt_cell is not None:
+          try:
+            w_num = float(wt_cell)
+            w_pct = w_num * 100 if w_num <= 1.0 else w_num
+            clean_row = {
+                "Security Description": item_str,
+                "Weight (%)": f"{w_pct:.2f}%",
+                "Raw Weight": round(w_pct, 2),
+            }
+            if curr_sec == "corp":
+              corp_debt.append(clean_row)
+            elif curr_sec == "gsec":
+              g_sec.append(clean_row)
+            elif curr_sec == "equity":
+              equity.append(clean_row)
+          except:
+            pass
+
+      # Fallback for Heading Totals
+      if not any(
+          "HEADING TOTAL" in x["Security Description"] for x in corp_debt
+      ):
+        for a in asset_alloc:
+          if "CORPORATE" in a["Asset Category"].upper():
+            corp_debt.insert(
+                0,
+                {
+                    "Security Description": "📌 CORPORATE DEBT (HEADING TOTAL)",
+                    "Weight (%)": a["Actual (%)"],
+                    "Raw Weight": a["Raw Actual"],
+                },
+            )
+            break
+      if not any("HEADING TOTAL" in x["Security Description"] for x in g_sec):
+        for a in asset_alloc:
+          if (
+              "GOVERNMENT" in a["Asset Category"].upper()
+              or "G-SEC" in a["Asset Category"].upper()
+          ):
+            g_sec.insert(
+                0,
+                {
+                    "Security Description": (
+                        "📌 GOVERNMENT SECURITIES (HEADING TOTAL)"
+                    ),
+                    "Weight (%)": a["Actual (%)"],
+                    "Raw Weight": a["Raw Actual"],
+                },
+            )
+            break
+      if not any("HEADING TOTAL" in x["Security Description"] for x in equity):
+        for a in asset_alloc:
+          if a["Asset Category"].strip().upper() == "EQUITY":
+            equity.insert(
+                0,
+                {
+                    "Security Description": "📌 EQUITY (HEADING TOTAL)",
+                    "Weight (%)": a["Actual (%)"],
+                    "Raw Weight": a["Raw Actual"],
+                },
+            )
+            break
+
+      parsed[sfin] = {
+          "sheet_name": sheet_name,
+          "fund_name": fund_name or sheet_name,
+          "sfin": sfin,
+          "asset_allocation": asset_alloc,
+          "ratings": ratings,
+          "sectors": sectors,
+          "corp_debt": corp_debt,
+          "g_sec": g_sec,
+          "equity": equity,
+      }
+  except Exception as e:
+    st.sidebar.error(f"Master Sheet Read Error: {e}")
+  return parsed
 
             # 2. Universal Rating Profile Scanner
             ratings = []
