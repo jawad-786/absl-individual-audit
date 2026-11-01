@@ -151,16 +151,21 @@ def norm_txt(s):
 
 
 # =============================================================
-# BLOCK 3: CONTEXTUAL LINE-BY-LINE PDF AUDIT HELPER
+# BLOCK 3: CONTEXTUAL LINE-BY-LINE PDF AUDIT HELPER (LINE-LOCKED)
 # =============================================================
 def audit_line_item_against_pdf(item_name, excel_val, pdf_text, tolerance=0.05):
     if not pdf_text:
         return "N/A", "N/A", "PENDING PDF"
         
     clean_item_upper = str(item_name).upper().strip()
-    is_other_item = "OTHER" in clean_item_upper
     
-    # Helper: Check if line matches exact category of OTHER (Strict separation: Corporate vs Government)
+    # 1. Residual OTHER check for Holdings (Corporate vs Government)
+    is_residual_other = (
+        clean_item_upper.startswith("OTHER ") 
+        and any(k in clean_item_upper for k in ["CORPORATE", "GOVERNMENT", "G-SEC"])
+        and not any(k in clean_item_upper for k in ["TREPS", "MONEY MARKET", "FINANCIAL"])
+    )
+    
     def matches_other_category(line_str):
         l_up = line_str.upper()
         if "OTHER" not in l_up:
@@ -169,21 +174,14 @@ def audit_line_item_against_pdf(item_name, excel_val, pdf_text, tolerance=0.05):
             return ("CORPORATE" in l_up or "CORP" in l_up) and "GOVERNMENT" not in l_up and "G-SEC" not in l_up
         elif "GOVERNMENT" in clean_item_upper or "G-SEC" in clean_item_upper or "GSEC" in clean_item_upper:
             return ("GOVERNMENT" in l_up or "G-SEC" in l_up or "GSEC" in l_up or "GOI" in l_up) and "CORPORATE" not in l_up
-        elif "EQUITY" in clean_item_upper:
-            return "EQUITY" in l_up and "DEBT" not in l_up
         return False
 
-    # 1. Special Handling for 0.00% items (e.g. OTHER CORPORATE DEBT 0.00%)
-    if abs(excel_val) < 0.001:
-        clean_name = re.sub(r"[^A-Za-z0-9\s]", " ", str(item_name)).strip()
+    # 2. Special Handling for 0.00% residual items
+    if abs(excel_val) < 0.001 and is_residual_other:
         lines = pdf_text.split("\n")
         found_line = None
         for line in lines:
-            if is_other_item:
-                if matches_other_category(line):
-                    found_line = line.strip()
-                    break
-            elif clean_name.upper() in line.upper():
+            if matches_other_category(line):
                 found_line = line.strip()
                 break
                 
@@ -196,14 +194,11 @@ def audit_line_item_against_pdf(item_name, excel_val, pdf_text, tolerance=0.05):
                 return f"{val:.2f}%", f"{diff:.2f}%", status
             return "0.00%", "0.00%", "PASS"
             
-        if is_other_item:
-            return "0.00%", "0.00%", "PASS"
-        else:
-            return "NOT IN PDF", "N/A", "MISMATCH (NOT IN PDF)"
+        return "0.00%", "0.00%", "PASS"
 
     lines = pdf_text.split("\n")
 
-    # 2. Precise Bond / G-Sec Holding Matcher (Using Coupon Rate & Maturity Date)
+    # 3. Precise Bond / G-Sec Holding Matcher (Using Coupon Rate & Maturity Date)
     m_coupon = re.search(r"(\d{1,2}\.\d{1,4})\s*%", item_name)
     coupon_str = m_coupon.group(1) if m_coupon else None
     
@@ -227,11 +222,11 @@ def audit_line_item_against_pdf(item_name, excel_val, pdf_text, tolerance=0.05):
                 best_line = line_clean
                 break
 
-    # 3. Line-by-line contextual search (For equities, sectors, ratings, or non-dated items)
+    # 4. Line-by-line contextual search (For Sectors, Equities, Asset Allocation)
     if not best_line:
         clean_name = re.sub(r"[^A-Za-z0-9\s]", " ", str(item_name)).strip()
         excluded_words = ["except", "from", "with", "than", "supply", "products", "activities", "compulsory", "social", "limited", "ltd"]
-        if not is_other_item:
+        if not is_residual_other:
             excluded_words.append("other")
             
         words = [w for w in clean_name.split() if len(w) >= 3 and w.lower() not in excluded_words]
@@ -240,7 +235,7 @@ def audit_line_item_against_pdf(item_name, excel_val, pdf_text, tolerance=0.05):
             line_clean = line.strip()
             if not line_clean:
                 continue
-            if is_other_item and not matches_other_category(line_clean):
+            if is_residual_other and not matches_other_category(line_clean):
                 continue
                 
             matches = sum(1 for w in words if re.search(r"\b" + re.escape(w) + r"\b", line_clean, re.IGNORECASE))
@@ -264,29 +259,25 @@ def audit_line_item_against_pdf(item_name, excel_val, pdf_text, tolerance=0.05):
                     best_line += " " + lines[idx + 1].strip()
                 break
 
+    # LINE-LOCKED VALUE EXTRACTION:
+    # Strictly extract the number from THIS line. NEVER scan random numbers across the page!
     if best_line:
         pcts_in_line = re.findall(r"(\d{1,3}\.\d{1,2})\s*%?", best_line)
         if pcts_in_line:
             # If line starts with coupon rate (e.g. "6.48% GOI ... 6.69%"), holding weight is the LAST percentage!
             if len(pcts_in_line) > 1 and coupon_str and pcts_in_line[0] == coupon_str:
-                closest_cand = float(pcts_in_line[-1])
-                diff = abs(closest_cand - excel_val)
-                status = "PASS" if diff <= tolerance else f"MISMATCH ({diff:.2f}%)"
-                return f"{closest_cand:.2f}%", f"{diff:.2f}%", status
+                line_val = float(pcts_in_line[-1])
+            elif len(pcts_in_line) > 1:
+                # If multiple numbers (e.g. range "20.18% 10%-20%"), pick closest to excel_val on this line
+                line_val = min([float(p) for p in pcts_in_line], key=lambda x: abs(x - excel_val))
+            else:
+                line_val = float(pcts_in_line[0])
 
-            closest_cand = None
-            min_d = 999.0
-            for p in pcts_in_line:
-                d = abs(float(p) - excel_val)
-                if d < min_d:
-                    min_d = d
-                    closest_cand = float(p)
-            if closest_cand is not None and min_d <= tolerance:
-                return f"{closest_cand:.2f}%", f"{min_d:.2f}%", "PASS"
-            elif closest_cand is not None and min_d <= 2.0:
-                return f"{closest_cand:.2f}%", f"{min_d:.2f}%", f"MISMATCH ({min_d:.2f}%)"
+            diff = abs(line_val - excel_val)
+            status = "PASS" if diff <= tolerance else f"MISMATCH ({diff:.2f}%)"
+            return f"{line_val:.2f}%", f"{diff:.2f}%", status
 
-    # 4. InDesign table column stream matching
+    # 5. Exact String Matching Fallback
     val_2dec = f"{excel_val:.2f}"
     val_1dec = f"{excel_val:.1f}"
     patterns = [
@@ -301,26 +292,6 @@ def audit_line_item_against_pdf(item_name, excel_val, pdf_text, tolerance=0.05):
             if not found_str.endswith("%"):
                 found_str += "%"
             return found_str, "0.00%", "PASS"
-
-    # 5. Numeric Proximity Matcher (Only for values > 0.5% and NOT for OTHER items)
-    if excel_val > 0.5 and not is_other_item:
-        all_numbers = re.findall(r"\b(\d{1,3}\.\d{1,2})\b", pdf_text)
-        closest = None
-        min_diff = 999.0
-        for num_s in all_numbers:
-            try:
-                n_val = float(num_s)
-                d = abs(n_val - excel_val)
-                if d < min_diff:
-                    min_diff = d
-                    closest = n_val
-            except:
-                pass
-
-        if closest is not None and min_diff <= tolerance:
-            return f"{closest:.2f}%", f"{min_diff:.2f}%", "PASS"
-        elif closest is not None and min_diff <= 1.5:
-            return f"{closest:.2f}%", f"{min_diff:.2f}%", f"MISMATCH ({min_diff:.2f}%)"
 
     return "NOT IN PDF", "N/A", "MISMATCH (NOT IN PDF)"
 
