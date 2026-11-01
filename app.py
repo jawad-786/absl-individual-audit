@@ -150,43 +150,51 @@ def norm_txt(s):
     return re.sub(r"[^A-Za-z0-9]", "", str(s or "")).upper()
 
 # -------------------------------------------------------------
-# PDF PERCENTAGE AUDIT HELPER (Matches Exact Number In PDF)
+# CONTEXTUAL LINE-BY-LINE PDF AUDIT HELPER (Matches by Name First)
 # -------------------------------------------------------------
-def audit_pct_against_pdf(excel_val, pdf_text, tolerance=0.05):
+def audit_line_item_against_pdf(item_name, excel_val, pdf_text, tolerance=0.05):
     if not pdf_text:
         return "N/A", "N/A", "PENDING PDF"
+        
+    clean_name = re.sub(r"[^A-Za-z0-9\s]", " ", str(item_name)).strip()
+    words = [w for w in clean_name.split() if len(w) > 3 and w.lower() not in [
+        "except", "other", "from", "with", "than", "supply", "products", "activities", "compulsory", "social", "limited", "ltd"
+    ]]
+    
+    # 1. Search for the exact line containing key tokens of item_name
+    best_line = None
+    max_matches = 0
+    lines = pdf_text.split("\n")
+    for idx, line in enumerate(lines):
+        line_clean = line.strip()
+        if not line_clean:
+            continue
+        matches = sum(1 for w in words if re.search(r"\b" + re.escape(w) + r"\b", line_clean, re.IGNORECASE))
+        if matches > max_matches and matches >= min(2, len(words)):
+            max_matches = matches
+            best_line = line_clean
+            # If percentage is printed on the next line
+            if not re.search(r"\d+\.\d+", best_line) and idx + 1 < len(lines):
+                best_line += " " + lines[idx + 1].strip()
+        elif len(words) == 1 and words[0].lower() in line_clean.lower():
+            best_line = line_clean
+            break
+
+    if best_line:
+        pcts_in_line = re.findall(r"(\d{1,3}\.\d{1,2})\s*%?", best_line)
+        if pcts_in_line:
+            pdf_num = float(pcts_in_line[-1])
+            diff = abs(pdf_num - excel_val)
+            status = "PASS" if diff <= tolerance else f"MISMATCH ({diff:.2f}%)"
+            return f"{pdf_num:.2f}%", f"{diff:.2f}%", status
+
+    # 2. Fallback: Check if exact value is present on page
     str_exact = f"{excel_val:.2f}%"
     str_one = f"{excel_val:.1f}%"
     if str_exact in pdf_text or str_one in pdf_text:
         return str_exact, "0.00%", "PASS"
 
-    all_pcts = re.findall(r"(\d{1,3}\.\d{1,2})%", pdf_text)
-    all_floats = re.findall(r"\b(\d{1,2}\.\d{2})\b", pdf_text)
-    candidates = []
-    for p in all_pcts:
-        try:
-            candidates.append(float(p))
-        except:
-            pass
-    for f in all_floats:
-        try:
-            candidates.append(float(f))
-        except:
-            pass
-
-    closest, min_d = None, 999.0
-    for cand in candidates:
-        d = abs(cand - excel_val)
-        if d < min_d:
-            min_d = d
-            closest = cand
-
-    if closest is not None and min_d <= tolerance:
-        return f"{closest:.2f}%", f"{min_d:.2f}%", "PASS"
-    elif closest is not None and min_d <= 2.0:
-        return f"{closest:.2f}%", f"{min_d:.2f}%", f"MISMATCH ({min_d:.2f}%)"
-    else:
-        return "NOT IN PDF", "N/A", "MISMATCH (NOT IN PDF)"
+    return "NOT IN PDF", "N/A", "MISMATCH (NOT IN PDF)"
 
 # -------------------------------------------------------------
 # SIDEBAR: Multi-File Uploaders
@@ -202,7 +210,7 @@ with st.sidebar:
     tolerance = st.slider("Tolerance Threshold (Difference %)", 0.00, 0.10, 0.02, 0.01)
 
 # -------------------------------------------------------------
-# PDF PARSER
+# PDF PARSER (Preserves Dedicated Detail Pages over Summary Pages)
 # -------------------------------------------------------------
 @st.cache_data(show_spinner=False)
 def extract_pdf_data(pdf_bytes):
@@ -213,9 +221,18 @@ def extract_pdf_data(pdf_bytes):
         reader = pypdf.PdfReader(io.BytesIO(pdf_bytes))
         for page_idx, page in enumerate(reader.pages):
             text = page.extract_text() or ""
-            sfin_matches = re.findall(r"(?:ULIF|ULGF)[A-Za-z0-9/]{10,35}", text)
-            if not sfin_matches:
+            raw_sfins = re.findall(r"(?:ULIF|ULGF)[\s\d/A-Za-z]{10,40}", text, re.IGNORECASE)
+            clean_sfins = []
+            for r_s in raw_sfins:
+                norm_s = re.sub(r"[\s]", "", r_s).upper()
+                m_s = re.search(r"(?:ULIF|ULGF)[A-Za-z0-9/]{10,35}", norm_s)
+                if m_s:
+                    clean_sfins.append(m_s.group(0))
+
+            if not clean_sfins:
                 continue
+
+            is_dedicated = len(set(clean_sfins)) <= 3 or "SECTORAL ALLOCATION" in text.upper() or "PORTFOLIO" in text.upper()
 
             nav_candidates = re.findall(r"\b\d{1,3}\.\d{4}\b", text)
             aum_candidates = re.findall(r"([\d\.]+)\s*Cr", text)
@@ -228,23 +245,23 @@ def extract_pdf_data(pdf_bytes):
 
             header_fund_name = None
             for line in text.split("\n")[:10]:
-                if any(s in line for s in sfin_matches):
+                if any(s in line for s in clean_sfins):
                     clean_line = re.sub(r"SFIN\s*No\.?\s*:?.*", "", line, flags=re.IGNORECASE).strip()
-                    clean_line = re.sub(r"(?:ULIF|ULGF)[A-Za-z0-9/]{10,35}", "", clean_line).strip()
+                    clean_line = re.sub(r"(?:ULIF|ULGF)[A-Za-z0-9/\s]{10,40}", "", clean_line).strip()
                     if clean_line and len(clean_line) > 3 and clean_line.upper() not in ["EQUITY", "CORPORATE DEBT", "TOTAL", "SECURITIES"]:
                         header_fund_name = clean_line
                         break
 
-            for sfin in set(sfin_matches):
-                sfin = sfin.strip()
+            for sfin in set(clean_sfins):
                 best_name = header_fund_name or BUILTIN_SCHEME_NAMES.get(sfin) or f"Scheme ({sfin})"
 
-                if sfin not in schemes_pdf or nav_candidates:
+                if sfin not in schemes_pdf or (is_dedicated and not schemes_pdf[sfin].get("is_dedicated", False)):
                     schemes_pdf[sfin] = {
                         "page": page_idx + 1,
                         "sfin": sfin,
                         "fund_name": best_name,
                         "page_text": text,
+                        "is_dedicated": is_dedicated,
                         "nav_candidates": [float(n) for n in nav_candidates],
                         "aum_candidates": [float(a) for a in aum_candidates],
                         "fund_manager": fm_val,
@@ -256,8 +273,51 @@ def extract_pdf_data(pdf_bytes):
     return schemes_pdf
 
 # -------------------------------------------------------------
-# EXCEL PARSER (Master Sheets with Heading Totals Capture)
+# EXCEL PARSER (Master Sheets with Exact Individual/Group Separation)
 # -------------------------------------------------------------
+SHEET_NAME_TO_SFIN = {
+    "INC-ADV-FUND": "ULIF01507/08/08BSLIINCADV109", # Individual Income Advantage Fund
+    "GR-INC-ADV": "ULGF01425/02/10BSLGINCADV109",   # Group Income Advantage Fund
+    "GR-GROWTH": "ULGF00112/06/01BSLGGROWTH109",
+    "GR-PROTECTOR": "ULGF00212/06/01BSLGSECURE109",
+    "GR-STABLE": "ULGF00312/06/01BSLGSTABLE109",
+    "GR-FIF": "ULGF00416/07/02BSLGFIXINT109",
+    "GR-BOND": "ULGF00530/05/03BSLIGRBOND109",
+    "GR-GILT": "ULGF00630/05/03BSLIGRGILT109",
+    "GR-MMFUND": "ULGF00824/08/04BSLIGRMMKT109",
+    "GR-ADVANTAGE": "ULGF01026/11/07BSLIGGRADV109",
+    "GR-DEBTFUND": "ULGF01322/09/08BSLGSHTDBT109",
+    "IND-BUILDER": "ULIF00113/03/01BSLBUILDER109",
+    "IND-ENHANCER": "ULIF00213/03/01BSLENHANCE109",
+    "INDPROTECTOR": "ULIF00313/03/01BSLPROTECT109",
+    "IPP-ENRICH": "ULIF00404/03/03BSLIENRICH109",
+    "IPP-GROWTH": "ULIF00504/03/03BSLIGROWTH109",
+    "IPP-NOURISH": "ULIF00604/03/03BSLNOURISH109",
+    "IND-CREATOR": "ULIF00704/02/04BSLCREATOR109",
+    "INDMAGNIFIER": "ULIF00826/06/04BSLIIMAGNI109",
+    "BILICO": "ULIF00931/05/05BSLBALANCE109",
+    "IND-AF": "ULIF01008/07/05BSLIASSURE109",
+    "INDMAXIMISER": "ULIF01101/06/07BSLIINMAXI109",
+    "IND-MULTI": "ULIF01217/10/07BSLINMULTI109",
+    "SUPER20": "ULIF01723/06/09BSLSUPER20109",
+    "TITANIUM": "ULIF01911/12/09BSLITITAN1109",
+    "TITANIUM2": "ULIF02011/12/09BSLITITAN2109",
+    "PLATINUM-PR1": "ULIF02203/02/10BSLPLATPR1109",
+    "BSLI-DISCF": "ULIF02301/07/10BSLIDISCPF109",
+    "BSLIPUREEQ": "ULIF02707/10/11BSLIPUREEQ109",
+    "BSLLIQPLUS": "ULIF02807/10/11BSLLIQPLUS109",
+    "BSLIVALUEM": "ULIF02907/10/11BSLIVALUEM109",
+    "BSLIASTALC": "ULIF03430/10/14BSLIASTALC109",
+    "BSLICNFIDX": "ULIF03530/10/14BSLICNFIDX109",
+    "MNC": "ULIF03722/06/18ABSLIMUMNC109",
+    "ABSLIESG": "ULIF03810/11/23ABSLESGFND109",
+    "SMALLCAP": "ULIF03910/11/23ABSLSMALCP109",
+    "INDALPHA50": "ULIF04015/06/24ABSLIALPHA109",
+    "INDMOMNTM": "ULIF04101/10/24ABSLMOMNTM109",
+    "INDDIVYIELD": "ULIF04206/11/25ABSLDIVYLD109",
+    "INDFLEXICAP": "ULIF04312/02/26ABSLFLXCAP109",
+}
+
 @st.cache_data(show_spinner=False)
 def parse_master_sheets(master_bytes):
     if not master_bytes:
@@ -268,7 +328,7 @@ def parse_master_sheets(master_bytes):
         for sheet_name in wb.sheetnames:
             ws = wb[sheet_name]
             fund_name = None
-            sfin = None
+            sfin = SHEET_NAME_TO_SFIN.get(sheet_name.strip().upper())
 
             for r in range(1, 30):
                 for c in range(1, 25):
@@ -300,7 +360,7 @@ def parse_master_sheets(master_bytes):
             if not fund_name or fund_name.upper() in ["EQUITY", "CORPORATE DEBT", "TOTAL"]:
                 fund_name = BUILTIN_SCHEME_NAMES.get(sfin) or ws.cell(2, 3).value or sheet_name
 
-            # 1. Asset Allocation (Clean rows, filter out junk labels)
+            # 1. Asset Allocation
             asset_alloc = []
             seen_cats = set()
             for r in range(6, 25):
@@ -432,7 +492,7 @@ def parse_master_sheets(master_bytes):
                     except:
                         pass
 
-            # Fallback: If heading total was not on the section header row in holdings, pull from asset allocation
+            # Fallback for Heading Totals
             if not any("HEADING TOTAL" in x["Security Description"] for x in corp_debt):
                 for a in asset_alloc:
                     if "CORPORATE" in a["Asset Category"].upper():
@@ -819,7 +879,7 @@ with tabs[2]:
                 for item in s_master["asset_allocation"]:
                     cat_name = item["Asset Category"]
                     excel_val = item["Raw Actual"]
-                    pdf_pct, diff_str, status_str = audit_pct_against_pdf(excel_val, pdf_text, tolerance)
+                    pdf_pct, diff_str, status_str = audit_line_item_against_pdf(cat_name, excel_val, pdf_text, tolerance)
                     
                     rng = str(item.get("Defined Mandate Range", "N/A"))
                     if "-" in rng and "%" in rng:
@@ -865,7 +925,7 @@ with tabs[2]:
                 for r_item in excel_ratings:
                     r_label = r_item["Rating"]
                     excel_val = r_item["Raw Weight"]
-                    pdf_pct, diff_str, status_str = audit_pct_against_pdf(excel_val, pdf_text, tolerance)
+                    pdf_pct, diff_str, status_str = audit_line_item_against_pdf(r_label, excel_val, pdf_text, tolerance)
 
                     rating_audit_rows.append({
                         "Credit Rating": r_label,
@@ -896,7 +956,7 @@ with tabs[2]:
             else:
                 st.info("Upload Master Factsheet Excel or PDF to audit rating profile.")
 
-        # 3. Sectoral Allocation (LIVE EXCEL VS PDF CROSS-AUDIT - EXACTLY LIKE IMAGE 2)
+        # 3. Sectoral Allocation (LIVE CONTEXTUAL AUDIT: Matches by Sector Name in PDF)
         with sub_tabs[2]:
             st.markdown("#### Sectoral Allocation Audit (Excel vs. PDF Published)")
             if s_master and s_master["sectors"]:
@@ -904,7 +964,7 @@ with tabs[2]:
                 for s_item in s_master["sectors"]:
                     sec_name = s_item["Sector Name"]
                     excel_val = s_item["Raw Weight"]
-                    pdf_pct, diff_str, status_str = audit_pct_against_pdf(excel_val, pdf_text, tolerance)
+                    pdf_pct, diff_str, status_str = audit_line_item_against_pdf(sec_name, excel_val, pdf_text, tolerance)
 
                     if "central government" not in str(sec_name).lower() and "gilt" not in str(sec_name).lower():
                         if excel_val > 25.0:
@@ -932,7 +992,7 @@ with tabs[2]:
                 for item in s_master["corp_debt"]:
                     sec_desc = item["Security Description"]
                     excel_val = item["Raw Weight"]
-                    pdf_pct, diff_str, status_str = audit_pct_against_pdf(excel_val, pdf_text, tolerance)
+                    pdf_pct, diff_str, status_str = audit_line_item_against_pdf(sec_desc, excel_val, pdf_text, tolerance)
 
                     cd_rows.append({
                         "Security Description": sec_desc,
@@ -955,7 +1015,7 @@ with tabs[2]:
                 for item in s_master["g_sec"]:
                     sec_desc = item["Security Description"]
                     excel_val = item["Raw Weight"]
-                    pdf_pct, diff_str, status_str = audit_pct_against_pdf(excel_val, pdf_text, tolerance)
+                    pdf_pct, diff_str, status_str = audit_line_item_against_pdf(sec_desc, excel_val, pdf_text, tolerance)
 
                     gs_rows.append({
                         "Security Description": sec_desc,
@@ -978,7 +1038,7 @@ with tabs[2]:
                 for item in s_master["equity"]:
                     sec_desc = item["Security Description"]
                     excel_val = item["Raw Weight"]
-                    pdf_pct, diff_str, status_str = audit_pct_against_pdf(excel_val, pdf_text, tolerance)
+                    pdf_pct, diff_str, status_str = audit_line_item_against_pdf(sec_desc, excel_val, pdf_text, tolerance)
 
                     eq_rows.append({
                         "Security Description": sec_desc,
