@@ -1052,24 +1052,64 @@ with tabs[2]:
             "7. AUM Audit & Charts",
         ])
 
-        # --- SUB-TAB 1: ASSET ALLOCATION (STRICT SEQUENCE: EQUITY -> DEBT -> G-SEC -> CORP -> MMI) ---
-        with sub_tabs[0]:
-            st.markdown("#### Asset Allocation Audit (Excel vs. PDF Published)")
-            if s_master and s_master["asset_allocation"]:
-                TARGET_ASSET_ORDER = [
-                    "EQUITY",
-                    "DEBT INSTRUMENTS",
-                    "GOVERNMENT SECURITIES",
-                    "CORPORATE DEBT",
-                    "MMI"
-                ]
+        # --- SUB-TAB 1: ASSET ALLOCATION (STRICT SEQUENCE + TOTAL 100% ROW) ---
+                alloc_rows = []
+                total_excel_val = 0.0
+                total_pdf_val = 0.0
+                has_pdf_values = False
 
-                def get_asset_sort_key(name):
-                    n = str(name).upper().strip()
-                    for idx, target in enumerate(TARGET_ASSET_ORDER):
-                        if target == n or target in n or n in target:
-                            return idx
-                    return 99
+                for item in sorted_alloc:
+                    cat_name = item["Asset Category"].upper()
+                    excel_val = item["Raw Actual"]
+                    pdf_pct, diff_str, status_str = audit_line_item_against_pdf(cat_name, excel_val, pdf_text, tolerance)
+                    
+                    total_excel_val += excel_val
+                    if pdf_pct not in ["NOT IN PDF", "N/A", "PENDING PDF"]:
+                        try:
+                            total_pdf_val += float(pdf_pct.replace("%", "").strip())
+                            has_pdf_values = True
+                        except:
+                            pass
+
+                    rng = str(item.get("Defined Mandate Range", "N/A"))
+                    alloc_rows.append({
+                        "Asset Category": cat_name,
+                        "Master Excel (%)": f"{excel_val:.2f}%",
+                        "PDF Published (%)": pdf_pct,
+                        "Difference (%)": diff_str,
+                        "Defined Mandate Range": rng,
+                        "Audit Status": status_str,
+                    })
+
+                # --- ADD DYNAMIC TOTAL ROW (100.00% CHECK) ---
+                if alloc_rows:
+                    pdf_total_str = f"{total_pdf_val:.2f}%" if has_pdf_values else "N/A"
+                    total_diff = abs(total_excel_val - total_pdf_val) if has_pdf_values else 0.0
+                    total_diff_str = f"{total_diff:.2f}%" if has_pdf_values else "N/A"
+
+                    # 100% check: Donhi 100% asayla pahijet
+                    is_excel_100 = abs(total_excel_val - 100.00) <= 0.05
+                    is_pdf_100 = has_pdf_values and (abs(total_pdf_val - 100.00) <= 0.05)
+
+                    if not has_pdf_values:
+                        total_status = "PENDING PDF"
+                    elif is_excel_100 and is_pdf_100:
+                        total_status = "PASS"
+                    else:
+                        total_status = f"MISMATCH (TOTAL {total_pdf_val:.2f}%)"
+
+                    alloc_rows.append({
+                        "Asset Category": "📌 TOTAL",
+                        "Master Excel (%)": f"{total_excel_val:.2f}%",
+                        "PDF Published (%)": pdf_total_str,
+                        "Difference (%)": total_diff_str,
+                        "Defined Mandate Range": "100.00%",
+                        "Audit Status": total_status,
+                    })
+
+                df_a = pd.DataFrame(alloc_rows)
+                styled_a = apply_status_style(df_a, "Audit Status")
+                st.dataframe(styled_a, use_container_width=True, hide_index=True)
 
                 # Filter out 0.00% Other Corporate Debt
                 alloc_items = [
