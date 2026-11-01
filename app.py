@@ -151,7 +151,7 @@ def norm_txt(s):
 
 
 # =============================================================
-# BLOCK 3: CONTEXTUAL LINE-BY-LINE PDF AUDIT HELPER (MULTI-LINE LOOKAHEAD)
+# BLOCK 3: CONTEXTUAL LINE-BY-LINE PDF AUDIT HELPER (MULTI-LINE LOOKAHEAD & BOND LOCK)
 # =============================================================
 def audit_line_item_against_pdf(item_name, excel_val, pdf_text, tolerance=0.05):
     if not pdf_text:
@@ -198,7 +198,7 @@ def audit_line_item_against_pdf(item_name, excel_val, pdf_text, tolerance=0.05):
 
     lines = pdf_text.split("\n")
 
-    # 2. Precise Bond / G-Sec Holding Matcher (Using Coupon Rate & Maturity Date)
+    # 2. Precise Bond / G-Sec Holding Matcher with Multi-Line Lookahead
     m_coupon = re.search(r"(\d{1,2}\.\d{1,4})\s*%", item_name)
     coupon_str = m_coupon.group(1) if m_coupon else None
     
@@ -207,22 +207,34 @@ def audit_line_item_against_pdf(item_name, excel_val, pdf_text, tolerance=0.05):
 
     best_line = None
     if coupon_str or date_str:
-        for line in lines:
+        for idx, line in enumerate(lines):
             line_clean = line.strip()
             if not line_clean:
                 continue
+                
+            matched = False
             if coupon_str and date_str:
-                if coupon_str in line_clean and date_str in line_clean:
-                    best_line = line_clean
-                    break
+                if coupon_str in line_clean or date_str in line_clean:
+                    matched = True
             elif coupon_str and re.search(rf"\b{re.escape(coupon_str)}\s*%", line_clean):
-                best_line = line_clean
-                break
+                matched = True
             elif date_str and date_str in line_clean:
-                best_line = line_clean
+                matched = True
+                
+            if matched:
+                # Multi-line lookahead: Long security names wrap onto next lines (e.g. Maharashtra SDL)
+                combined = line_clean
+                for k in range(1, 4):
+                    pcts_found = re.findall(r"(\d{1,3}\.\d{1,2})\s*%?", combined)
+                    # Stop combining if we have both coupon and holding weight, or if holding weight is reached
+                    if len(pcts_found) >= 2 or (len(pcts_found) >= 1 and coupon_str not in pcts_found):
+                        break
+                    if idx + k < len(lines):
+                        combined += " " + lines[idx + k].strip()
+                best_line = combined
                 break
 
-    # 3. Line search with multi-line lookahead for wrapped InDesign table cells
+    # 3. Line search with multi-line lookahead for Sectors, Equities, Asset Allocation
     if not best_line:
         clean_name = re.sub(r"[^A-Za-z0-9\s]", " ", str(item_name)).strip()
         excluded_words = ["except", "from", "with", "than", "supply", "products", "activities", "compulsory", "social", "limited", "ltd"]
@@ -241,7 +253,6 @@ def audit_line_item_against_pdf(item_name, excel_val, pdf_text, tolerance=0.05):
             matches = sum(1 for w in words if re.search(r"\b" + re.escape(w) + r"\b", line_clean, re.IGNORECASE))
             if matches > max_matches and matches >= min(2, len(words)):
                 max_matches = matches
-                # Multi-line lookahead: Peek ahead up to 3 lines to capture wrapped cell percentages
                 combined = line_clean
                 for k in range(1, 4):
                     if re.search(r"\d{1,3}\.\d{1,2}", combined):
@@ -272,11 +283,11 @@ def audit_line_item_against_pdf(item_name, excel_val, pdf_text, tolerance=0.05):
                 best_line = combined
                 break
 
-    # LINE-LOCKED VALUE EXTRACTION (No stray numbers from across the page)
+    # LINE-LOCKED VALUE EXTRACTION (Always picks the actual holding weight)
     if best_line:
         pcts_in_line = re.findall(r"(\d{1,3}\.\d{1,2})\s*%?", best_line)
         if pcts_in_line:
-            # If line starts with coupon rate (e.g. "6.48% GOI ... 6.69%"), holding weight is the LAST percentage!
+            # If line has coupon rate at start (e.g. "7.18% STATE DEV ... 2.24%"), holding weight is the LAST percentage!
             if len(pcts_in_line) > 1 and coupon_str and pcts_in_line[0] == coupon_str:
                 line_val = float(pcts_in_line[-1])
             elif len(pcts_in_line) > 1:
@@ -288,7 +299,7 @@ def audit_line_item_against_pdf(item_name, excel_val, pdf_text, tolerance=0.05):
             status = "PASS" if diff <= tolerance else f"MISMATCH ({diff:.2f}%)"
             return f"{line_val:.2f}%", f"{diff:.2f}%", status
 
-    # 4. InDesign table column stream matching
+    # 4. Exact String Matching Fallback
     val_2dec = f"{excel_val:.2f}"
     val_1dec = f"{excel_val:.1f}"
     patterns = [
@@ -305,7 +316,6 @@ def audit_line_item_against_pdf(item_name, excel_val, pdf_text, tolerance=0.05):
             return found_str, "0.00%", "PASS"
 
     return "NOT IN PDF", "N/A", "MISMATCH (NOT IN PDF)"
-
 
 # =============================================================
 # BLOCK 4: SIDEBAR UPLOADERS & PDF PARSER
