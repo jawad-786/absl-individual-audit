@@ -151,7 +151,7 @@ def norm_txt(s):
 
 
 # =============================================================
-# BLOCK 3: CONTEXTUAL LINE-BY-LINE PDF AUDIT HELPER (FIXED)
+# BLOCK 3: CONTEXTUAL LINE-BY-LINE PDF AUDIT HELPER
 # =============================================================
 def audit_line_item_against_pdf(item_name, excel_val, pdf_text, tolerance=0.05):
     if not pdf_text:
@@ -196,50 +196,67 @@ def audit_line_item_against_pdf(item_name, excel_val, pdf_text, tolerance=0.05):
                 return f"{val:.2f}%", f"{diff:.2f}%", status
             return "0.00%", "0.00%", "PASS"
             
-        # In InDesign factsheets, if residual holding is 0.00%, it is omitted from print
         if is_other_item:
             return "0.00%", "0.00%", "PASS"
         else:
             return "NOT IN PDF", "N/A", "MISMATCH (NOT IN PDF)"
 
-    val_2dec = f"{excel_val:.2f}"
-    val_1dec = f"{excel_val:.1f}"
-    clean_name = re.sub(r"[^A-Za-z0-9\s]", " ", str(item_name)).strip()
-    
-    excluded_words = ["except", "from", "with", "than", "supply", "products", "activities", "compulsory", "social", "limited", "ltd"]
-    if not is_other_item:
-        excluded_words.append("other")
-        
-    words = [w for w in clean_name.split() if len(w) >= 3 and w.lower() not in excluded_words]
-    
-    # 2. Line-by-line contextual search
-    best_line = None
-    max_matches = 0
     lines = pdf_text.split("\n")
-    for idx, line in enumerate(lines):
-        line_clean = line.strip()
-        if not line_clean:
-            continue
-            
-        # Strict OTHER category check
-        if is_other_item:
-            if not matches_other_category(line_clean):
+
+    # 2. Precise Bond / G-Sec Holding Matcher (Using Coupon Rate & Maturity Date)
+    m_coupon = re.search(r"(\d{1,2}\.\d{1,4})\s*%", item_name)
+    coupon_str = m_coupon.group(1) if m_coupon else None
+    
+    m_date = re.search(r"(\d{2}/\d{2}/\d{2,4})", item_name)
+    date_str = m_date.group(1) if m_date else None
+
+    best_line = None
+    if coupon_str or date_str:
+        for line in lines:
+            line_clean = line.strip()
+            if not line_clean:
                 continue
+            if coupon_str and date_str:
+                if coupon_str in line_clean and date_str in line_clean:
+                    best_line = line_clean
+                    break
+            elif coupon_str and re.search(rf"\b{re.escape(coupon_str)}\s*%", line_clean):
+                best_line = line_clean
+                break
+            elif date_str and date_str in line_clean:
+                best_line = line_clean
+                break
+
+    # 3. Line-by-line contextual search (For equities, sectors, ratings, or non-dated items)
+    if not best_line:
+        clean_name = re.sub(r"[^A-Za-z0-9\s]", " ", str(item_name)).strip()
+        excluded_words = ["except", "from", "with", "than", "supply", "products", "activities", "compulsory", "social", "limited", "ltd"]
+        if not is_other_item:
+            excluded_words.append("other")
             
-        matches = sum(1 for w in words if re.search(r"\b" + re.escape(w) + r"\b", line_clean, re.IGNORECASE))
-        if matches > max_matches and matches >= min(2, len(words)):
-            max_matches = matches
-            best_line = line_clean
-            if not re.search(r"\d+\.\d+", best_line) and idx + 1 < len(lines):
-                best_line += " " + lines[idx + 1].strip()
-        elif len(words) == 1 and re.search(r"\b" + re.escape(words[0]) + r"\b", line_clean, re.IGNORECASE):
-            best_line = line_clean
-            if not re.search(r"\d+\.\d+", best_line) and idx + 1 < len(lines):
-                best_line += " " + lines[idx + 1].strip()
-            break
+        words = [w for w in clean_name.split() if len(w) >= 3 and w.lower() not in excluded_words]
+        max_matches = 0
+        for idx, line in enumerate(lines):
+            line_clean = line.strip()
+            if not line_clean:
+                continue
+            if is_other_item and not matches_other_category(line_clean):
+                continue
+                
+            matches = sum(1 for w in words if re.search(r"\b" + re.escape(w) + r"\b", line_clean, re.IGNORECASE))
+            if matches > max_matches and matches >= min(2, len(words)):
+                max_matches = matches
+                best_line = line_clean
+                if not re.search(r"\d+\.\d+", best_line) and idx + 1 < len(lines):
+                    best_line += " " + lines[idx + 1].strip()
+            elif len(words) == 1 and re.search(r"\b" + re.escape(words[0]) + r"\b", line_clean, re.IGNORECASE):
+                best_line = line_clean
+                if not re.search(r"\d+\.\d+", best_line) and idx + 1 < len(lines):
+                    best_line += " " + lines[idx + 1].strip()
+                break
 
     # MMI / Money Market alias support
-    if not best_line and "MMI" in clean_name.upper():
+    if not best_line and "MMI" in clean_item_upper:
         for idx, line in enumerate(lines):
             if "MONEY MARKET" in line.upper():
                 best_line = line.strip()
@@ -250,6 +267,13 @@ def audit_line_item_against_pdf(item_name, excel_val, pdf_text, tolerance=0.05):
     if best_line:
         pcts_in_line = re.findall(r"(\d{1,3}\.\d{1,2})\s*%?", best_line)
         if pcts_in_line:
+            # If line starts with coupon rate (e.g. "6.48% GOI ... 6.69%"), holding weight is the LAST percentage!
+            if len(pcts_in_line) > 1 and coupon_str and pcts_in_line[0] == coupon_str:
+                closest_cand = float(pcts_in_line[-1])
+                diff = abs(closest_cand - excel_val)
+                status = "PASS" if diff <= tolerance else f"MISMATCH ({diff:.2f}%)"
+                return f"{closest_cand:.2f}%", f"{diff:.2f}%", status
+
             closest_cand = None
             min_d = 999.0
             for p in pcts_in_line:
@@ -262,7 +286,9 @@ def audit_line_item_against_pdf(item_name, excel_val, pdf_text, tolerance=0.05):
             elif closest_cand is not None and min_d <= 2.0:
                 return f"{closest_cand:.2f}%", f"{min_d:.2f}%", f"MISMATCH ({min_d:.2f}%)"
 
-    # 3. InDesign table column stream matching
+    # 4. InDesign table column stream matching
+    val_2dec = f"{excel_val:.2f}"
+    val_1dec = f"{excel_val:.1f}"
     patterns = [
         rf"\b{re.escape(val_2dec)}\s*%",
         rf"\b{re.escape(val_2dec)}\b",
@@ -276,7 +302,7 @@ def audit_line_item_against_pdf(item_name, excel_val, pdf_text, tolerance=0.05):
                 found_str += "%"
             return found_str, "0.00%", "PASS"
 
-    # 4. Numeric Proximity Matcher (Only for values > 0.5% and NOT for OTHER items)
+    # 5. Numeric Proximity Matcher (Only for values > 0.5% and NOT for OTHER items)
     if excel_val > 0.5 and not is_other_item:
         all_numbers = re.findall(r"\b(\d{1,3}\.\d{1,2})\b", pdf_text)
         closest = None
