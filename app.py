@@ -1,5 +1,5 @@
 # =============================================================
-# BLOCK 1: APP CONFIG & UI HEADER
+# ABSLI FUND FACTSHEET AUDIT ENGINE (FULL PRODUCTION CODE)
 # =============================================================
 import io
 import re
@@ -8,6 +8,9 @@ import pandas as pd
 import pypdf
 import streamlit as st
 
+# =============================================================
+# BLOCK 1: APP CONFIG & UI HEADER
+# =============================================================
 st.set_page_config(
     page_title="ABSLI Fund Factsheet Audit Engine",
     page_icon="🛡️",
@@ -62,7 +65,6 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
-
 
 # =============================================================
 # BLOCK 2: BUILT-IN SCHEME DIRECTORY & STYLING
@@ -149,9 +151,8 @@ def apply_status_style(df, column_name):
 def norm_txt(s):
     return re.sub(r"[^A-Za-z0-9]", "", str(s or "")).upper()
 
-
 # =============================================================
-# BLOCK 3: CONTEXTUAL LINE-BY-LINE PDF AUDIT HELPER (MULTI-LINE LOOKAHEAD & BOND LOCK)
+# BLOCK 3: CONTEXTUAL LINE-BY-LINE PDF AUDIT HELPER (LINE-LOCKED)
 # =============================================================
 def audit_line_item_against_pdf(item_name, excel_val, pdf_text, tolerance=0.05):
     if not pdf_text:
@@ -159,7 +160,7 @@ def audit_line_item_against_pdf(item_name, excel_val, pdf_text, tolerance=0.05):
         
     clean_item_upper = str(item_name).upper().strip()
     
-    # Residual OTHER check for Holdings (Corporate vs Government)
+    # 1. Residual OTHER check for Holdings (Corporate vs Government)
     is_residual_other = (
         clean_item_upper.startswith("OTHER ") 
         and any(k in clean_item_upper for k in ["CORPORATE", "GOVERNMENT", "G-SEC"])
@@ -176,7 +177,7 @@ def audit_line_item_against_pdf(item_name, excel_val, pdf_text, tolerance=0.05):
             return ("GOVERNMENT" in l_up or "G-SEC" in l_up or "GSEC" in l_up or "GOI" in l_up) and "CORPORATE" not in l_up
         return False
 
-    # 1. Special Handling for 0.00% residual items
+    # 2. Special Handling for 0.00% residual items
     if abs(excel_val) < 0.001 and is_residual_other:
         lines = pdf_text.split("\n")
         found_line = None
@@ -198,7 +199,7 @@ def audit_line_item_against_pdf(item_name, excel_val, pdf_text, tolerance=0.05):
 
     lines = pdf_text.split("\n")
 
-    # 2. Precise Bond / G-Sec Holding Matcher with Multi-Line Lookahead
+    # 3. Precise Bond / G-Sec Holding Matcher with Multi-Line Lookahead
     m_coupon = re.search(r"(\d{1,2}\.\d{1,4})\s*%", item_name)
     coupon_str = m_coupon.group(1) if m_coupon else None
     
@@ -222,11 +223,9 @@ def audit_line_item_against_pdf(item_name, excel_val, pdf_text, tolerance=0.05):
                 matched = True
                 
             if matched:
-                # Multi-line lookahead: Long security names wrap onto next lines (e.g. Maharashtra SDL)
                 combined = line_clean
                 for k in range(1, 4):
                     pcts_found = re.findall(r"(\d{1,3}\.\d{1,2})\s*%?", combined)
-                    # Stop combining if we have both coupon and holding weight, or if holding weight is reached
                     if len(pcts_found) >= 2 or (len(pcts_found) >= 1 and coupon_str not in pcts_found):
                         break
                     if idx + k < len(lines):
@@ -234,7 +233,7 @@ def audit_line_item_against_pdf(item_name, excel_val, pdf_text, tolerance=0.05):
                 best_line = combined
                 break
 
-    # 3. Line search with multi-line lookahead for Sectors, Equities, Asset Allocation
+    # 4. Line search with multi-line lookahead for Sectors, Equities, Asset Allocation
     if not best_line:
         clean_name = re.sub(r"[^A-Za-z0-9\s]", " ", str(item_name)).strip()
         excluded_words = ["except", "from", "with", "than", "supply", "products", "activities", "compulsory", "social", "limited", "ltd"]
@@ -270,12 +269,12 @@ def audit_line_item_against_pdf(item_name, excel_val, pdf_text, tolerance=0.05):
                 best_line = combined
                 break
 
-    # MMI / Money Market alias support (Ignore 'Crores' or '₹' footnote lines)
+    # 5. MMI / Money Market alias support (Ignore footnote '₹ in Crores' lines)
     if not best_line and "MMI" in clean_item_upper:
         for idx, line in enumerate(lines):
             line_up = line.upper()
             if any(k in line_up for k in ["IN CRORES", "CRORES", "₹"]):
-                continue  # Footnote wali line skip keli
+                continue
             if "MMI" in line_up or "MONEY MARKET" in line_up:
                 combined = line.strip()
                 for k in range(1, 4):
@@ -287,11 +286,10 @@ def audit_line_item_against_pdf(item_name, excel_val, pdf_text, tolerance=0.05):
                 best_line = combined
                 break
 
-    # LINE-LOCKED VALUE EXTRACTION (Always picks the actual holding weight)
+    # LINE-LOCKED VALUE EXTRACTION (Always picks the exact holding weight)
     if best_line:
         pcts_in_line = re.findall(r"(\d{1,3}\.\d{1,2})\s*%?", best_line)
         if pcts_in_line:
-            # If line has coupon rate at start (e.g. "7.18% STATE DEV ... 2.24%"), holding weight is the LAST percentage!
             if len(pcts_in_line) > 1 and coupon_str and pcts_in_line[0] == coupon_str:
                 line_val = float(pcts_in_line[-1])
             elif len(pcts_in_line) > 1:
@@ -303,7 +301,7 @@ def audit_line_item_against_pdf(item_name, excel_val, pdf_text, tolerance=0.05):
             status = "PASS" if diff <= tolerance else f"MISMATCH ({diff:.2f}%)"
             return f"{line_val:.2f}%", f"{diff:.2f}%", status
 
-    # 4. Exact String Matching Fallback
+    # 6. Exact String Matching Fallback
     val_2dec = f"{excel_val:.2f}"
     val_1dec = f"{excel_val:.1f}"
     patterns = [
@@ -344,7 +342,6 @@ def extract_pdf_data(pdf_bytes):
         for page_idx, page in enumerate(reader.pages):
             text = page.extract_text() or ""
             
-            # Clean IRDAI SFIN matching (Must end in 109, drops trailing text)
             clean_sfins = re.findall(r"(?:ULIF|ULGF)\d{3}\d{2}/\d{2}/\d{2}[A-Za-z0-9]+?109", text)
             if not clean_sfins:
                 clean_sfins = re.findall(r"(?:ULIF|ULGF)[A-Za-z0-9/]+?109", text)
@@ -354,17 +351,14 @@ def extract_pdf_data(pdf_bytes):
 
             unique_sfins = set(clean_sfins)
             
-            # True Dedicated Page Detector: Rejects summary pages with 30-40 SFINs
             has_detail_sections = any(sec in text.upper() for sec in [
                 "ASSET ALLOCATION", "SECTORAL ALLOCATION", "ABOUT THE FUND", 
                 "FUND MANAGER", "RATING PROFILE", "HOLDINGS"
             ])
             is_true_dedicated = (len(unique_sfins) <= 2) and has_detail_sections
 
-            # NAV Candidate extraction
             nav_candidates = re.findall(r"\b\d{1,3}\.\d{4}\b", text)
 
-            # Robust AUM Extraction: Targets "Asset held as on ... ₹ 174.73 Cr" (Prevents 109 footer bug)
             aum_val = None
             m_aum_line = re.search(r"(?:Asset\s+held|AUM|Assets?\s+under\s+Management).*?[₹\s]+([0-9,]+\.[0-9]{1,2})\s*(?:Cr|Crores)\b", text, re.IGNORECASE)
             if m_aum_line:
@@ -400,7 +394,6 @@ def extract_pdf_data(pdf_bytes):
                 elif is_true_dedicated and not prev_info.get("is_true_dedicated", False):
                     should_update = True
                 elif is_true_dedicated and prev_info.get("is_true_dedicated", False):
-                    # Multi-page combination: Merge pages if scheme spans across 2 pages
                     prev_info["page_text"] += "\n" + text
                     if aum_val and not prev_info.get("aum_val"):
                         prev_info["aum_val"] = aum_val
@@ -423,21 +416,20 @@ def extract_pdf_data(pdf_bytes):
         st.sidebar.error(f"Error reading PDF: {e}")
     return schemes_pdf
 
-
 # =============================================================
 # BLOCK 5: MASTER EXCEL PARSER & SHEET MAP
 # =============================================================
 SHEET_NAME_TO_SFIN = {
-    # Income Advantage Funds (Strict Separation with Sheet Name Variations)
-    "INC-ADV-FUND": "ULIF01507/08/08BSLIINCADV109",  # Individual Income Advantage
+    # Income Advantage Funds (Strict Separation)
+    "INC-ADV-FUND": "ULIF01507/08/08BSLIINCADV109",
     "INC ADV FUND": "ULIF01507/08/08BSLIINCADV109",
     "INCOME ADVANTAGE": "ULIF01507/08/08BSLIINCADV109",
     "IND-INC-ADV": "ULIF01507/08/08BSLIINCADV109",
-    "GR-INC-ADV": "ULGF01425/02/10BSLGINCADV109",    # Group Income Advantage
+    "GR-INC-ADV": "ULGF01425/02/10BSLGINCADV109",
     "GR-INCOME-ADV": "ULGF01425/02/10BSLGINCADV109",
     "GROUP INCOME ADV": "ULGF01425/02/10BSLGINCADV109",
 
-    # Builder & Group Funds
+    # Builder & Group Funds (ULGF)
     "IND-BUILDER": "ULIF00113/03/01BSLBUILDER109",
     "BUILDER": "ULIF00113/03/01BSLBUILDER109",
     "GR-GROWTH": "ULGF00112/06/01BSLGGROWTH109",
@@ -605,7 +597,7 @@ def parse_master_sheets(master_bytes):
                                 break
                         break
 
-            # 4. Line Holdings (Captures Heading Totals + Individual Items)
+            # 4. Line Holdings
             corp_debt, g_sec, equity = [], [], []
             curr_sec = None
             for r in range(5, 95):
@@ -661,7 +653,7 @@ def parse_master_sheets(master_bytes):
                     except:
                         pass
 
-            # Fallback for Heading Totals
+            # Fallbacks for Heading Totals
             if not any("HEADING TOTAL" in x["Security Description"] for x in corp_debt):
                 for a in asset_alloc:
                     if "CORPORATE" in a["Asset Category"].upper():
@@ -692,7 +684,6 @@ def parse_master_sheets(master_bytes):
     except Exception as e:
         st.sidebar.error(f"Master Sheet Read Error: {e}")
     return parsed
-
 
 # =============================================================
 # BLOCK 6: SECONDARY PARSERS & AUM LINKING
@@ -778,14 +769,13 @@ def parse_ytm_file(ytm_bytes):
         st.sidebar.error(f"YTM File Error: {e}")
     return ytm_dict
 
-# Load Data
+# Load Data Sources
 pdf_data = extract_pdf_data(uploaded_pdf.getvalue()) if uploaded_pdf else {}
 master_data = parse_master_sheets(uploaded_master.getvalue()) if uploaded_master else {}
 nav_data = parse_nav_file(uploaded_nav.getvalue()) if uploaded_nav else {}
 aum_data = parse_aum_file(uploaded_aum.getvalue()) if uploaded_aum else {}
 ytm_data = parse_ytm_file(uploaded_ytm.getvalue()) if uploaded_ytm else {}
 
-# Complete 1-to-1 SFIN to Row Label Code Mapping
 EXHAUSTIVE_SFIN_MAP = {
     # Group Funds (ULGF)
     "ULGF00112/06/01BSLGGROWTH109": "GR-GROWTH",
@@ -879,7 +869,6 @@ tabs = st.tabs([
     "📥 Export Full Audit Workbook",
 ])
 
-
 # =============================================================
 # BLOCK 7: TAB 1 & 2 (NAV & AUM MASTER AUDITS)
 # =============================================================
@@ -947,7 +936,6 @@ with tabs[1]:
             fname = nav_data.get(sfin, {}).get("name") or BUILTIN_SCHEME_NAMES.get(sfin) or pdf_data.get(sfin, {}).get("fund_name") or sfin
             ftype = "Individual (ULIF)" if sfin.startswith("ULIF") else "Group (ULGF)"
 
-            # Targets exact AUM from dedicated page
             p_info = pdf_data.get(sfin)
             pdf_aum_val = p_info.get("aum_val") if p_info else None
 
@@ -981,7 +969,6 @@ with tabs[1]:
         df_aum_audit = pd.DataFrame(aum_audit_rows)
         styled_aum_audit = apply_status_style(df_aum_audit, "Audit Status")
         st.dataframe(styled_aum_audit, use_container_width=True, hide_index=True)
-
 
 # =============================================================
 # BLOCK 8: TAB 3 (SCHEME-WISE DEEP AUDIT & 7 SUB-TABS)
@@ -1024,7 +1011,6 @@ with tabs[2]:
         with nav_col2:
             chosen_sfin = st.selectbox("Select Scheme to Inspect:", options=sorted_sfins, key="scheme_selector_key", format_func=lambda x: available_schemes[x])
 
-        # Smart Record Matcher between PDF and Master Excel
         def get_master_record(target_sfin, master_dict):
             if not master_dict or not target_sfin:
                 return None
@@ -1071,7 +1057,6 @@ with tabs[2]:
                             return idx
                     return 99
 
-                # Filter out 0.00% Other Corporate Debt
                 alloc_items = [
                     item for item in s_master["asset_allocation"]
                     if not (item["Asset Category"].upper() == "OTHER CORPORATE DEBT" and item["Raw Actual"] == 0.0)
@@ -1107,70 +1092,6 @@ with tabs[2]:
                     })
 
                 # Dynamic 100.00% TOTAL Row Check
-                if alloc_rows:
-                    pdf_total_str = f"{total_pdf_val:.2f}%" if has_pdf_values else "N/A"
-                    total_diff = abs(total_excel_val - total_pdf_val) if has_pdf_values else 0.0
-                    total_diff_str = f"{total_diff:.2f}%" if has_pdf_values else "N/A"
-
-                    is_excel_100 = abs(total_excel_val - 100.00) <= 0.05
-                    is_pdf_100 = has_pdf_values and (abs(total_pdf_val - 100.00) <= 0.05)
-
-                    if not has_pdf_values:
-                        total_status = "PENDING PDF"
-                    elif is_excel_100 and is_pdf_100:
-                        total_status = "PASS"
-                    else:
-                        total_status = f"MISMATCH (TOTAL {total_pdf_val:.2f}%)"
-
-                    alloc_rows.append({
-                        "Asset Category": "📌 TOTAL",
-                        "Master Excel (%)": f"{total_excel_val:.2f}%",
-                        "PDF Published (%)": pdf_total_str,
-                        "Difference (%)": total_diff_str,
-                        "Defined Mandate Range": "100.00%",
-                        "Audit Status": total_status,
-                    })
-
-                df_a = pd.DataFrame(alloc_rows)
-                styled_a = apply_status_style(df_a, "Audit Status")
-                st.dataframe(styled_a, use_container_width=True, hide_index=True)
-            else:
-                st.info("Upload Master Factsheet Excel to view Asset Allocation compliance.")
-
-                
-
-                # Dynamic 100.00% TOTAL Row
-                if alloc_rows:
-                    pdf_total_str = f"{total_pdf_val:.2f}%" if has_pdf_values else "N/A"
-                    total_diff = abs(total_excel_val - total_pdf_val) if has_pdf_values else 0.0
-                    total_diff_str = f"{total_diff:.2f}%" if has_pdf_values else "N/A"
-
-                    is_excel_100 = abs(total_excel_val - 100.00) <= 0.05
-                    is_pdf_100 = has_pdf_values and (abs(total_pdf_val - 100.00) <= 0.05)
-
-                    if not has_pdf_values:
-                        total_status = "PENDING PDF"
-                    elif is_excel_100 and is_pdf_100:
-                        total_status = "PASS"
-                    else:
-                        total_status = f"MISMATCH (TOTAL {total_pdf_val:.2f}%)"
-
-                    alloc_rows.append({
-                        "Asset Category": "📌 TOTAL",
-                        "Master Excel (%)": f"{total_excel_val:.2f}%",
-                        "PDF Published (%)": pdf_total_str,
-                        "Difference (%)": total_diff_str,
-                        "Defined Mandate Range": "100.00%",
-                        "Audit Status": total_status,
-                    })
-
-                df_a = pd.DataFrame(alloc_rows)
-                styled_a = apply_status_style(df_a, "Audit Status")
-                st.dataframe(styled_a, use_container_width=True, hide_index=True)
-            else:
-                st.info("Upload Master Factsheet Excel to view Asset Allocation compliance.")
-
-                # Dynamic 100.00% TOTAL Row
                 if alloc_rows:
                     pdf_total_str = f"{total_pdf_val:.2f}%" if has_pdf_values else "N/A"
                     total_diff = abs(total_excel_val - total_pdf_val) if has_pdf_values else 0.0
@@ -1380,7 +1301,6 @@ with tabs[2]:
                     found_code = None
                     excel_aum_val = None
 
-            # Pulls exact AUM extracted from dedicated page
             pdf_aum_val = pdf_info.get("aum_val") if pdf_info else None
 
             m_c1, m_c2, m_c3 = st.columns(3)
@@ -1403,7 +1323,6 @@ with tabs[2]:
                     st.table(chart_df)
             else:
                 st.info("Upload `AUM with Fund names.xlsx` in sidebar to view asset class breakdown.")
-
 
 # =============================================================
 # BLOCK 9: TAB 4, 5 & 6 (BREAKUP, YTM & EXPORT REPORT)
