@@ -270,16 +270,20 @@ def audit_line_item_against_pdf(item_name, excel_val, pdf_text, tolerance=0.05):
                 best_line = combined
                 break
 
-    # MMI / Money Market alias support
+    # MMI / Money Market alias support (Ignore 'Crores' or '₹' footnote lines)
     if not best_line and "MMI" in clean_item_upper:
         for idx, line in enumerate(lines):
-            if "MONEY MARKET" in line.upper():
+            line_up = line.upper()
+            if any(k in line_up for k in ["IN CRORES", "CRORES", "₹"]):
+                continue  # Footnote wali line skip keli
+            if "MMI" in line_up or "MONEY MARKET" in line_up:
                 combined = line.strip()
                 for k in range(1, 4):
-                    if re.search(r"\d{1,3}\.\d{1,2}", combined):
+                    if re.search(r"\d{1,3}\.\d{1,2}\s*%", combined):
                         break
                     if idx + k < len(lines):
-                        combined += " " + lines[idx + k].strip()
+                        if not any(k_w in lines[idx + k].upper() for k_w in ["IN CRORES", "CRORES", "₹"]):
+                            combined += " " + lines[idx + k].strip()
                 best_line = combined
                 break
 
