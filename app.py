@@ -686,7 +686,7 @@ def parse_master_sheets(master_bytes):
     return parsed
 
 # =============================================================
-# BLOCK 6: SECONDARY PARSERS & AUM LINKING
+# BLOCK 6: SECONDARY PARSERS & AUM LINKING (ROW LABELS & FUZZY MATCH)
 # =============================================================
 @st.cache_data(show_spinner=False)
 def parse_aum_file(aum_bytes):
@@ -698,32 +698,60 @@ def parse_aum_file(aum_bytes):
         target_sheet = "Net_Assets" if "Net_Assets" in xls.sheet_names else xls.sheet_names[0]
         df = pd.read_excel(xls, sheet_name=target_sheet, header=None)
 
+        # 1. Parse Primary Table via 'Row Labels' (Col 0: Label, Col 1: Value in INR, Col 2: Value in Cr)
         for r in range(1, len(df)):
-            name_val = str(df.iloc[r, 0]).strip() if pd.notnull(df.iloc[r, 0]) else ""
-            code_val = str(df.iloc[r, 1]).strip() if pd.notnull(df.iloc[r, 1]) else ""
+            label = str(df.iloc[r, 0]).strip() if pd.notnull(df.iloc[r, 0]) else ""
+            if not label or label in ["Row Labels", "nan", "Grand Total"]:
+                continue
 
-            v_cr = df.iloc[r, 3] if len(df.columns) > 3 and pd.notnull(df.iloc[r, 3]) else None
-            if v_cr is None and len(df.columns) > 2 and pd.notnull(df.iloc[r, 2]):
-                v_raw = df.iloc[r, 2]
-                if isinstance(v_raw, (int, float)):
-                    v_cr = float(v_raw) / 1e7
-
-            if code_val and code_val not in ["Row Labels", "nan", "Grand Total"]:
+            val_cr = None
+            if len(df.columns) > 2 and pd.notnull(df.iloc[r, 2]):
                 try:
-                    cr_num = float(v_cr) if v_cr is not None else 0.0
-                    if abs(cr_num) < 0.001:
-                        cr_num = 0.0
-                    aum_dict[code_val] = {
-                        "Name": name_val if name_val != "nan" else "",
-                        "Code": code_val,
-                        "Total AUM (Cr)": round(cr_num, 2),
-                        "Corporate Debt": 0.0,
-                        "Equity": 0.0,
-                        "G-Sec": 0.0,
-                        "MMI": 0.0,
-                    }
-                except Exception:
+                    val_cr = float(df.iloc[r, 2])
+                except:
                     pass
+
+            if val_cr is None and len(df.columns) > 1 and pd.notnull(df.iloc[r, 1]):
+                try:
+                    val_cr = float(df.iloc[r, 1]) / 1e7
+                except:
+                    pass
+
+            if val_cr is not None:
+                aum_dict[label] = {
+                    "Code": label,
+                    "Name": label,
+                    "Total AUM (Cr)": round(val_cr, 2),
+                    "Corporate Debt": 0.0,
+                    "Equity": 0.0,
+                    "G-Sec": 0.0,
+                    "MMI": 0.0,
+                }
+
+        # 2. Parse Secondary Helper Table if present (Col 7: Short Code, Col 8: Cr Value, Col 10: Full Fund Name)
+        if len(df.columns) > 8:
+            for r in range(1, len(df)):
+                c7 = str(df.iloc[r, 7]).strip() if pd.notnull(df.iloc[r, 7]) else ""
+                c8 = df.iloc[r, 8] if pd.notnull(df.iloc[r, 8]) else None
+                c10 = str(df.iloc[r, 10]).strip() if len(df.columns) > 10 and pd.notnull(df.iloc[r, 10]) else ""
+
+                if c7 and c7 not in ["nan", ""]:
+                    try:
+                        v_cr = float(c8)
+                        record = {
+                            "Code": c7,
+                            "Name": c10 if c10 and c10 != "nan" else c7,
+                            "Total AUM (Cr)": round(v_cr, 2),
+                            "Corporate Debt": 0.0,
+                            "Equity": 0.0,
+                            "G-Sec": 0.0,
+                            "MMI": 0.0,
+                        }
+                        aum_dict[c7] = record
+                        if c10 and c10 != "nan":
+                            aum_dict[c10] = record
+                    except:
+                        pass
     except Exception as e:
         st.sidebar.error(f"AUM File Error: {e}")
     return aum_dict
@@ -832,20 +860,37 @@ EXHAUSTIVE_SFIN_MAP = {
     "ULIF04510/09/26ABSLPENINA109": "ABSLPENINA",
 }
 
-def get_exact_aum_for_sfin(sfin, fund_name, aum_data):
-    if not aum_data:
+def get_exact_aum_for_sfin(sfin, fund_name, aum_dict):
+    if not aum_dict:
         return None, None
+
+    # 1. Exact or Normalized match via EXHAUSTIVE_SFIN_MAP
     target_code = EXHAUSTIVE_SFIN_MAP.get(sfin)
-    if target_code and target_code in aum_data:
-        return target_code, aum_data[target_code]["Total AUM (Cr)"]
-    clean_name = norm_txt(fund_name)
-    for code, info in aum_data.items():
-        if info.get("Name") and norm_txt(info["Name"]) == clean_name:
-            return code, info["Total AUM (Cr)"]
-    clean_sfin = norm_txt(sfin)
-    for code, info in aum_data.items():
-        if len(code) >= 4 and norm_txt(code) in clean_sfin:
-            return code, info["Total AUM (Cr)"]
+    if target_code and target_code in aum_dict:
+        return target_code, aum_dict[target_code]["Total AUM (Cr)"]
+
+    if target_code:
+        norm_t = norm_txt(target_code)
+        for c, info in aum_dict.items():
+            if norm_txt(c) == norm_t:
+                return c, info["Total AUM (Cr)"]
+
+    # 2. Match by Fund Name or Label variations
+    if fund_name:
+        norm_f = norm_txt(fund_name)
+        for c, info in aum_dict.items():
+            name_val = info.get("Name", "")
+            if name_val and norm_txt(name_val) == norm_f:
+                return c, info["Total AUM (Cr)"]
+            if norm_txt(c) == norm_f:
+                return c, info["Total AUM (Cr)"]
+
+    # 3. Match by SFIN Substring
+    norm_s = norm_txt(sfin)
+    for c, info in aum_dict.items():
+        if len(c) >= 4 and norm_txt(c) in norm_s:
+            return c, info["Total AUM (Cr)"]
+
     return None, None
 
 # Status Metrics
