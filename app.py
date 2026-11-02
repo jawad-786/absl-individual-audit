@@ -870,7 +870,7 @@ tabs = st.tabs([
 ])
 
 # =============================================================
-# BLOCK 7: TAB 1 & 2 (NAV & AUM MASTER AUDITS)
+# BLOCK 7: TAB 1 & 2 (NAV & AUM MASTER AUDITS - 4 DECIMAL NAV FIX)
 # =============================================================
 # --- TAB 1: NAV MASTER AUDIT ---
 with tabs[0]:
@@ -909,6 +909,7 @@ with tabs[0]:
             else:
                 status = "NOT IN PDF"
 
+            # Strict 4-decimal formatting (e.g. 10.1932, 0.0000)
             excel_nav_str = f"{excel_nav:.4f}" if excel_nav is not None else "N/A"
             pdf_nav_str = f"{pdf_nav:.4f}" if pdf_nav is not None else "N/A"
             diff_str = f"{diff:.4f}" if pdf_nav is not None else "N/A"
