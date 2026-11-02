@@ -909,13 +909,17 @@ with tabs[0]:
             else:
                 status = "NOT IN PDF"
 
+            excel_nav_str = f"{excel_nav:.4f}" if excel_nav is not None else "N/A"
+            pdf_nav_str = f"{pdf_nav:.4f}" if pdf_nav is not None else "N/A"
+            diff_str = f"{diff:.4f}" if pdf_nav is not None else "N/A"
+
             nav_rows.append({
                 "Category": ninfo.get("type", "Fund"),
                 "SFIN Code": sfin,
                 "Fund Name": ninfo["name"],
-                "Excel NAV Per Unit": round(excel_nav, 4),
-                "PDF Published NAV": round(pdf_nav, 4) if pdf_nav else "N/A",
-                "Difference": round(diff, 4) if pdf_nav else "N/A",
+                "Excel NAV Per Unit": excel_nav_str,
+                "PDF Published NAV": pdf_nav_str,
+                "Difference": diff_str,
                 "Audit Status": status,
             })
 
