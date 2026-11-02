@@ -915,7 +915,7 @@ tabs = st.tabs([
 ])
 
 # =============================================================
-# BLOCK 7: TAB 1 & 2 (NAV & AUM MASTER AUDITS - 4 DECIMAL NAV FIX)
+# BLOCK 7: TAB 1 & 2 (NAV & AUM MASTER AUDITS WITH FILTERS)
 # =============================================================
 # --- TAB 1: NAV MASTER AUDIT ---
 with tabs[0]:
@@ -923,7 +923,12 @@ with tabs[0]:
     if not nav_data:
         st.info("💡 Sirf **`Birla Nav.xlsx`** sidebar mein upload karein aur saari schemes ka NAV ek sath check ho jayega.")
     else:
-        cat_filter = st.radio("Filter Schemes (NAV):", ["All Schemes", "Individual Funds (ULIF)", "Group Funds (ULGF)"], horizontal=True, key="nav_cat_filter")
+        cat_filter = st.radio(
+            "Filter Schemes (NAV):",
+            ["All Schemes", "Individual Funds (ULIF)", "Group Funds (ULGF)"],
+            horizontal=True,
+            key="nav_cat_filter"
+        )
         nav_rows = []
         for sfin, ninfo in nav_data.items():
             if cat_filter == "Individual Funds (ULIF)" and not sfin.startswith("ULIF"):
@@ -954,7 +959,7 @@ with tabs[0]:
             else:
                 status = "NOT IN PDF"
 
-            # Strict 4-decimal formatting (e.g. 10.1932, 0.0000)
+            # Strict 4-decimal formatting (10.1932, 0.0000)
             excel_nav_str = f"{excel_nav:.4f}" if excel_nav is not None else "N/A"
             pdf_nav_str = f"{pdf_nav:.4f}" if pdf_nav is not None else "N/A"
             diff_str = f"{diff:.4f}" if pdf_nav is not None else "N/A"
@@ -979,10 +984,24 @@ with tabs[1]:
     if not aum_data and not pdf_data:
         st.info("💡 Sidebar mein **`AUM with Fund names.xlsx`** aur **Factsheet PDF** upload karein AUM audit ke liye.")
     else:
+        # AUM Filter: All Schemes, Individual Funds (ULIF), Group Funds (ULGF)
+        aum_cat_filter = st.radio(
+            "Filter Schemes (AUM):",
+            ["All Schemes", "Individual Funds (ULIF)", "Group Funds (ULGF)"],
+            horizontal=True,
+            key="aum_cat_filter"
+        )
+
         aum_audit_rows = []
         all_aum_sfins = set(list(pdf_data.keys()) + list(nav_data.keys()))
 
         for sfin in sorted(list(all_aum_sfins)):
+            # Category Filter Logic
+            if aum_cat_filter == "Individual Funds (ULIF)" and not sfin.startswith("ULIF"):
+                continue
+            if aum_cat_filter == "Group Funds (ULGF)" and not sfin.startswith("ULGF"):
+                continue
+
             fname = nav_data.get(sfin, {}).get("name") or BUILTIN_SCHEME_NAMES.get(sfin) or pdf_data.get(sfin, {}).get("fund_name") or sfin
             ftype = "Individual (ULIF)" if sfin.startswith("ULIF") else "Group (ULGF)"
 
