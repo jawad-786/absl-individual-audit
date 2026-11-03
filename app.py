@@ -809,16 +809,78 @@ def parse_ytm_file(ytm_bytes):
         return {}
     ytm_dict = {}
     try:
-        df = pd.read_excel(io.BytesIO(ytm_bytes))
+        xls = pd.ExcelFile(io.BytesIO(ytm_bytes))
+        sheet = xls.sheet_names[0]
+        df_raw = pd.read_excel(xls, sheet_name=sheet, header=None)
+
+        # 1. Header row auto-detect karein (pehle 10 rows scan karke)
+        header_row_idx = 0
+        for r in range(min(10, len(df_raw))):
+            row_str = " ".join([str(v).upper() for v in df_raw.iloc[r] if pd.notnull(v)])
+            if any(k in row_str for k in ["SCHEME", "FUND"]) and any(k in row_str for k in ["YTM", "YIELD", "DURATION"]):
+                header_row_idx = r
+                break
+
+        df = pd.read_excel(xls, sheet_name=sheet, header=header_row_idx)
+
+        # 2. Dynamic Column Mapping (Case & Space insensitive)
+        code_col = None
+        name_col = None
+        ytm_col = None
+        dur_col = None
+
+        for col in df.columns:
+            c_up = str(col).strip().upper()
+            if any(k in c_up for k in ["SCHEME CODE", "SCHEME_CODE", "CODE", "SCHEME NO"]):
+                code_col = col
+            elif any(k in c_up for k in ["SCHEME NAME", "FUND NAME", "SCHEME_NAME", "PLAN"]):
+                name_col = col
+            elif "YTM" in c_up or "YIELD" in c_up:
+                ytm_col = col
+            elif "MOD" in c_up or "DUR" in c_up:
+                dur_col = col
+
+        # Fallback agar specific code column na mile toh pehla text column
+        if not code_col and name_col:
+            code_col = name_col
+        elif not code_col and len(df.columns) > 0:
+            code_col = df.columns[0]
+
+        # 3. Data Ingestion
         for _, row in df.iterrows():
-            code = str(row.get("Scheme Code", "")).strip()
-            ytm = row.get("YTM", None)
-            dur = row.get("Duration", None)
-            if code and code != "nan":
-                ytm_dict[code] = {
-                    "YTM": float(ytm) * 100 if pd.notnull(ytm) else None,
-                    "Duration": float(dur) if pd.notnull(dur) else None,
-                }
+            code_val = str(row.get(code_col, "")).strip() if code_col else ""
+            if not code_val or code_val in ["nan", "None", "Total", "Grand Total"]:
+                continue
+
+            name_val = str(row.get(name_col, "")).strip() if name_col else code_val
+            
+            raw_ytm = row.get(ytm_col) if ytm_col else None
+            raw_dur = row.get(dur_col) if dur_col else None
+
+            ytm_val = None
+            if pd.notnull(raw_ytm):
+                try:
+                    f_ytm = float(str(raw_ytm).replace("%", "").strip())
+                    ytm_val = f_ytm * 100 if f_ytm <= 0.30 else f_ytm
+                except:
+                    pass
+
+            dur_val = None
+            if pd.notnull(raw_dur):
+                try:
+                    dur_val = float(str(raw_dur).strip())
+                except:
+                    pass
+
+            ytm_dict[code_val] = {
+                "Code": code_val,
+                "Name": name_val,
+                "YTM": ytm_val,
+                "Duration": dur_val,
+            }
+            if name_val and name_val != code_val:
+                ytm_dict[name_val] = ytm_dict[code_val]
+
     except Exception as e:
         st.sidebar.error(f"YTM File Error: {e}")
     return ytm_dict
