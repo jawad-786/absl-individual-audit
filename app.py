@@ -1516,31 +1516,38 @@ with tabs[3]:
             })
         st.dataframe(pd.DataFrame(aum_rows), use_container_width=True, hide_index=True)
 
-# --- TAB 5: YTM & DURATION AUDIT (EXCEL VS PDF LIVE AUDIT) ---
+# --- TAB 5: YTM & DURATION AUDIT (EXACT 11 GROUP FUNDS WHITELIST) ---
 with tabs[4]:
     st.subheader("📉 Yield to Maturity (YTM) & Duration Audit (Excel vs. PDF)")
     if not ytm_data:
         st.info("💡 Sirf **`Yield, Duration Report-30.09.26.xlsx`** upload karein YTM aur Duration audit ke liye.")
     else:
-        # Filter & Toggle Bar
-        col_f1, col_f2 = st.columns([3, 2])
-        with col_f1:
-            ytm_cat_filter = st.radio(
-                "Filter Schemes (YTM):",
-                ["All Schemes", "Individual Funds (ULIF)", "Group Funds (ULGF)"],
-                horizontal=True,
-                key="ytm_cat_filter",
-            )
-        with col_f2:
-            st.write("")  # Alignment spacing
-            hide_not_in_pdf = st.checkbox(
-                "👉 Hide 'NOT IN PDF' Schemes",
-                value=True,
-                help="Tick karne par sirf wahi schemes show hongi jo Factsheet PDF ke andar published hain."
-            )
+        ytm_cat_filter = st.radio(
+            "Filter Schemes (YTM):",
+            ["All Schemes", "Individual Funds (ULIF)", "Group Funds (ULGF)"],
+            horizontal=True,
+            key="ytm_cat_filter",
+        )
+
+        # STRICT 11 GROUP FUNDS WHITELIST (Exact Image Mapping)
+        EXACT_GROUP_SCHEMES = {
+            "GR-PROTECTOR": {"name": "Group Secure Fund", "sfin": "ULGF00212/06/01BSLGSECURE109"},
+            "GR-STABLE": {"name": "Group Stable Fund", "sfin": "ULGF00312/06/01BSLGSTABLE109"},
+            "GR-GROWTH": {"name": "Group Growth Fund", "sfin": "ULGF00112/06/01BSLGGROWTH109"},
+            "GR-ADVANTAGE": {"name": "Group Growth Advantage Fund", "sfin": "ULGF01026/11/07BSLIGGRADV109"},
+            "GR-MMFUND": {"name": "Group Money Market Fund", "sfin": "ULGF00824/08/04BSLIGRMMKT109"},
+            "GR-DEBTFUND": {"name": "Group Short Term Debt Fund", "sfin": "ULGF01322/09/08BSLGSHTDBT109"},
+            "GR-INC-ADV": {"name": "Group Income Advantage Fund", "sfin": "ULGF01425/02/10BSLGINCADV109"},
+            "GR-GILT": {"name": "Group Gilt Fund", "sfin": "ULGF00630/05/03BSLIGRGILT109"},
+            "GR-BOND": {"name": "Group Bond Fund", "sfin": "ULGF00530/05/03BSLIGRBOND109"},
+            "GR-FIF": {"name": "Group Fixed Interest Fund", "sfin": "ULGF00416/07/02BSLGFIXINT109"},
+            "GRCAPPROTECT": {"name": "Group Capital Protection Fund", "sfin": "ULGF02311/07/25BSLCAPPRTC109"},
+        }
 
         def get_ytm_category(code_str, name_str, grp_str):
             combined = (str(code_str) + " " + str(name_str) + " " + str(grp_str)).upper()
+            if code_str in EXACT_GROUP_SCHEMES:
+                return "Group (ULGF)"
             if "GROUP" in combined or "ULGF" in combined or combined.startswith("GR-"):
                 return "Group (ULGF)"
             elif "INDIVIDUAL" in combined or "PENSION" in combined or "ULIF" in combined or combined.startswith("IND-"):
@@ -1563,7 +1570,11 @@ with tabs[4]:
             grp_val = info.get("Grouping", "")
             cat_type = get_ytm_category(code_clean, fname, grp_val)
 
-            # Apply Category Filter
+            # RULE: Group category mein sirf exact 11 schemes allow hongi
+            if cat_type == "Group (ULGF)" and code_clean not in EXACT_GROUP_SCHEMES:
+                continue
+
+            # Apply UI Filter
             if ytm_cat_filter == "Individual Funds (ULIF)" and cat_type != "Individual (ULIF)":
                 continue
             if ytm_cat_filter == "Group Funds (ULGF)" and cat_type != "Group (ULGF)":
@@ -1571,9 +1582,9 @@ with tabs[4]:
 
             excel_ytm = info.get("YTM")
             excel_dur = info.get("Duration")
-            sfin_in_record = info.get("SFIN")
+            sfin_in_record = info.get("SFIN") or EXACT_GROUP_SCHEMES.get(code_clean, {}).get("sfin")
 
-            # 1. Scheme Match in PDF Data
+            # 1. Match Scheme in PDF
             pdf_info = None
             if sfin_in_record and sfin_in_record in pdf_data:
                 pdf_info = pdf_data[sfin_in_record]
@@ -1605,7 +1616,27 @@ with tabs[4]:
             if pdf_info:
                 p_txt = pdf_info.get("page_text", "")
 
-                # A. Flexible YTM Extraction
+                # Duration Extraction (Banner, Colon, Hyphen, Newlines, Units)
+                m_dur = re.search(
+                    r"(?:Modified\s+Duration|Duration|Average\s+Maturity)\s*[:\|\-]?\s*([0-9]{1,2}\.[0-9]{1,2})\s*(?:years|yrs)?",
+                    p_txt,
+                    re.IGNORECASE
+                )
+                if m_dur:
+                    try:
+                        pdf_dur = float(m_dur.group(1))
+                    except:
+                        pass
+                elif pdf_info.get("mod_duration") is not None:
+                    pdf_dur = pdf_info.get("mod_duration")
+
+                # Duration Value Proximity Check
+                if pdf_dur is None and excel_dur is not None:
+                    d_str = f"{excel_dur:.2f}"
+                    if re.search(rf"\b{re.escape(d_str)}\s*(?:years|yrs)?\b", p_txt, re.IGNORECASE):
+                        pdf_dur = excel_dur
+
+                # YTM Extraction
                 m_ytm = re.search(
                     r"(?:Yield\s+to\s+Maturity|Annualised\s+Portfolio\s+YTM|Portfolio\s+YTM|YTM|Yield)\s*[:\|\-]?\s*([0-9]{1,2}\.[0-9]{1,2})\s*%?",
                     p_txt,
@@ -1624,26 +1655,7 @@ with tabs[4]:
                     if re.search(rf"\b{re.escape(y_str)}\s*%", p_txt):
                         pdf_ytm = excel_ytm
 
-                # B. Flexible Duration Extraction
-                m_dur = re.search(
-                    r"(?:Modified\s+Duration|Duration)\s*[:\|\-]?\s*([0-9]{1,2}\.[0-9]{1,2})\s*(?:years|yrs)?",
-                    p_txt,
-                    re.IGNORECASE
-                )
-                if m_dur:
-                    try:
-                        pdf_dur = float(m_dur.group(1))
-                    except:
-                        pass
-                elif pdf_info.get("mod_duration") is not None:
-                    pdf_dur = pdf_info.get("mod_duration")
-
-                if pdf_dur is None and excel_dur is not None:
-                    d_str = f"{excel_dur:.2f}"
-                    if re.search(rf"\b{re.escape(d_str)}\s*(?:years|yrs)?\b", p_txt, re.IGNORECASE):
-                        pdf_dur = excel_dur
-
-            # 2. Audit Status Calculation
+            # 2. Audit Status
             if not uploaded_pdf:
                 status = "PENDING PDF"
             elif pdf_info is None:
@@ -1664,12 +1676,10 @@ with tabs[4]:
                         parts.append(f"Dur Diff: {abs(pdf_dur - excel_dur):.2f}")
                     status = f"MISMATCH ({', '.join(parts)})"
 
-            # 3. Filter Out "NOT IN PDF" if Checkbox is Checked
-            if hide_not_in_pdf and status == "NOT IN PDF":
-                continue
-
-            # Clean Display Name
-            display_name = re.sub(r"^(?:ULIF|ULGF)[A-Za-z0-9/\-]+", "", fname).strip()
+            # Display Proper Fund Name
+            display_name = EXACT_GROUP_SCHEMES.get(code_clean, {}).get("name")
+            if not display_name:
+                display_name = re.sub(r"^(?:ULIF|ULGF)[A-Za-z0-9/\-]+", "", fname).strip()
             if not display_name:
                 display_name = BUILTIN_SCHEME_NAMES.get(sfin_in_record, fname)
 
