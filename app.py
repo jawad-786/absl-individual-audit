@@ -142,7 +142,6 @@ def color_status_cells(val):
     return ""
 
 def apply_status_style(df, column_name):
-    # Agar DataFrame khali ho ya column na mile, crash na ho
     if df.empty or column_name not in df.columns:
         return df
     styler = df.style
@@ -150,6 +149,9 @@ def apply_status_style(df, column_name):
         return styler.map(color_status_cells, subset=[column_name])
     else:
         return styler.applymap(color_status_cells, subset=[column_name])
+
+def norm_txt(s):
+    return re.sub(r"[^A-Za-z0-9]", "", str(s or "")).upper()
 
 # =============================================================
 # BLOCK 3: CONTEXTUAL LINE-BY-LINE AUDIT HELPER (FUTURE-PROOF)
@@ -358,7 +360,6 @@ with st.sidebar:
     uploaded_ytm = st.file_uploader("5. Yield & Duration Excel (Yield...xlsx)", type=["xlsx"])
     tolerance = st.slider("Tolerance Threshold (Difference %)", 0.00, 0.10, 0.02, 0.01)
 
-@st.cache_data(show_spinner=False)
 def safe_float(val):
     if val is None:
         return None
@@ -965,7 +966,7 @@ EXHAUSTIVE_SFIN_MAP = {
     "ULIF00704/02/04BSLCREATOR109": "IND-CREATOR",
     "ULIF00826/06/04BSLIIMAGNI109": "INDMAGNIFIER",
     "ULIF00931/05/05BSLBALANCE109": "BILICO",
-    "ULIF01008/07/05BSLIASSURE109": "IND-AF",
+    "ULIF001008/07/05BSLIASSURE109": "IND-AF",
     "ULIF01101/06/07BSLIINMAXI109": "INDMAXIMISER",
     "ULIF01217/10/07BSLINMULTI109": "IND-MULTI",
     "ULIF01507/08/08BSLIINCADV109": "INC-ADV-FUND",
@@ -995,8 +996,9 @@ EXHAUSTIVE_SFIN_MAP = {
     "ULIF04510/09/26ABSLPENINA109": "ABSLPENINA",
 }
 
-def norm_txt(s):
-    return re.sub(r"[^A-Za-z0-9]", "", str(s or "")).upper()
+def get_exact_aum_for_sfin(sfin, fund_name, aum_dict):
+    if not aum_dict:
+        return None, None
 
     target_code = EXHAUSTIVE_SFIN_MAP.get(sfin)
     if target_code and target_code in aum_dict:
@@ -1122,7 +1124,6 @@ with tabs[1]:
         )
 
         aum_audit_rows = []
-        # SFINs from PDF, NAV, or Master data
         all_aum_sfins = set(list(pdf_data.keys()) + list(nav_data.keys()) + list(master_data.keys()))
 
         for sfin in sorted(list(all_aum_sfins)):
@@ -1164,7 +1165,6 @@ with tabs[1]:
                 "Audit Status": status,
             })
 
-        # Columns explicitly define karein taaki empty hone par bhi crash na ho
         cols = ["Category", "SFIN Code", "Fund Name", "Excel Code", "Excel AUM (Cr)", "PDF Published AUM", "Difference", "Audit Status"]
         df_aum_audit = pd.DataFrame(aum_audit_rows, columns=cols) if aum_audit_rows else pd.DataFrame(columns=cols)
 
@@ -1706,40 +1706,3 @@ with tabs[5]:
         file_name="ABSLI_Factsheet_Audit_Summary_Sep2026.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
-
-# =============================================================
-# HELPER: NORMALIZE TEXT & AUM MATCHING (SAFE FIX)
-# =============================================================
-def norm_txt(s):
-    return re.sub(r"[^A-Za-z0-9]", "", str(s or "")).upper()
-
-
-def get_exact_aum_for_sfin(sfin, fund_name, aum_dict):
-    if not aum_dict:
-        return None, None
-
-    target_code = EXHAUSTIVE_SFIN_MAP.get(sfin)
-    if target_code and target_code in aum_dict:
-        return target_code, aum_dict[target_code]["Total AUM (Cr)"]
-
-    if target_code:
-        norm_t = norm_txt(target_code)
-        for c, info in aum_dict.items():
-            if norm_txt(c) == norm_t:
-                return c, info["Total AUM (Cr)"]
-
-    if fund_name:
-        norm_f = norm_txt(fund_name)
-        for c, info in aum_dict.items():
-            name_val = info.get("Name", "")
-            if name_val and norm_txt(name_val) == norm_f:
-                return c, info["Total AUM (Cr)"]
-            if norm_txt(c) == norm_f:
-                return c, info["Total AUM (Cr)"]
-
-    norm_s = norm_txt(sfin)
-    for c, info in aum_dict.items():
-        if len(c) >= 4 and norm_txt(c) in norm_s:
-            return c, info["Total AUM (Cr)"]
-
-    return None, None
