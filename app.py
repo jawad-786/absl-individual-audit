@@ -357,7 +357,7 @@ def audit_line_item_against_pdf(item_name, excel_val, pdf_text, tolerance=0.05):
 # =============================================================
 with st.sidebar:
     st.header("📂 Data Sources")
-    st.caption("Upload PDF (Individual/Group) & Master Excel Sheets:")
+    st.caption("Upload PDF (Group Factsheet PDF) & Master Excel Sheets:")
     uploaded_pdf = st.file_uploader("1. Factsheet PDF (Group Factsheet)", type=["pdf"])
     uploaded_master = st.file_uploader("2. Master Factsheet Excel", type=["xlsx"])
     uploaded_nav = st.file_uploader("3. Birla Nav Excel (Birla Nav.xlsx)", type=["xlsx"])
