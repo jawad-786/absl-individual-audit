@@ -739,7 +739,7 @@ def parse_master_sheets(master_bytes):
     return parsed
 
 # =============================================================
-# BLOCK 6: SECONDARY PARSERS & AUM LINKING
+# BLOCK 6: AUM PARSER WITH AUTOMATIC CRORES (1e7) CONVERSION
 # =============================================================
 @st.cache_data(show_spinner=False)
 def parse_aum_file(aum_bytes):
@@ -751,26 +751,32 @@ def parse_aum_file(aum_bytes):
         target_sheet = "Net_Assets" if "Net_Assets" in xls.sheet_names else xls.sheet_names[0]
         df = pd.read_excel(xls, sheet_name=target_sheet, header=None)
 
+        # 1. Parse via Row Labels (Col 0: Label, Col 1: INR / Crores, Col 2: Crores)
         for r in range(1, len(df)):
             label = str(df.iloc[r, 0]).strip() if pd.notnull(df.iloc[r, 0]) else ""
             if not label or label in ["Row Labels", "nan", "Grand Total"]:
                 continue
 
             val_cr = None
+
+            # Agar Col 2 par already Crores mein value ho
             if len(df.columns) > 2 and pd.notnull(df.iloc[r, 2]):
                 try:
-                    val_cr = float(df.iloc[r, 2])
+                    v_raw = float(str(df.iloc[r, 2]).replace(",", "").strip())
+                    val_cr = v_raw / 1e7 if v_raw > 100000 else v_raw
                 except:
                     pass
 
+            # Agar Col 1 par INR value ho
             if val_cr is None and len(df.columns) > 1 and pd.notnull(df.iloc[r, 1]):
                 try:
-                    val_cr = float(df.iloc[r, 1]) / 1e7
+                    v_raw = float(str(df.iloc[r, 1]).replace(",", "").strip())
+                    val_cr = v_raw / 1e7 if v_raw > 100000 else v_raw
                 except:
                     pass
 
             if val_cr is not None:
-                aum_dict[label] = {
+                record = {
                     "Code": label,
                     "Name": label,
                     "Total AUM (Cr)": round(val_cr, 2),
@@ -779,7 +785,9 @@ def parse_aum_file(aum_bytes):
                     "G-Sec": 0.0,
                     "MMI": 0.0,
                 }
+                aum_dict[label] = record
 
+        # 2. Parse secondary columns if present (Col 7: Code, Col 8: AUM, Col 10: Name)
         if len(df.columns) > 8:
             for r in range(1, len(df)):
                 c7 = str(df.iloc[r, 7]).strip() if pd.notnull(df.iloc[r, 7]) else ""
@@ -788,11 +796,12 @@ def parse_aum_file(aum_bytes):
 
                 if c7 and c7 not in ["nan", ""]:
                     try:
-                        v_cr = float(c8)
+                        v_raw = float(str(c8).replace(",", "").strip())
+                        val_cr = v_raw / 1e7 if v_raw > 100000 else v_raw
                         record = {
                             "Code": c7,
                             "Name": c10 if c10 and c10 != "nan" else c7,
-                            "Total AUM (Cr)": round(v_cr, 2),
+                            "Total AUM (Cr)": round(val_cr, 2),
                             "Corporate Debt": 0.0,
                             "Equity": 0.0,
                             "G-Sec": 0.0,
