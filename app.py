@@ -579,6 +579,8 @@ def parse_master_sheets(master_bytes):
             # 1. Asset Allocation
             asset_alloc = []
             seen_cats = set()
+            VALID_ASSET_CLASSES = ["EQUITY", "DEBT INSTRUMENTS", "GOVERNMENT SECURITIES", "CORPORATE DEBT", "OTHER CORPORATE DEBT", "MMI", "MONEY MARKET"]
+            
             for r in range(6, 25):
                 for c in range(5, 12):
                     cat = ws.cell(r, c).value
@@ -587,7 +589,13 @@ def parse_master_sheets(master_bytes):
                         cat_upper = cat_str.upper()
                         if any(x in cat_upper for x in ["IN RS", "CRORES", "TOTAL", "ASSET CATEGORY", "ASSET ALLOCATION"]):
                             continue
-                        if any(ac in cat_upper for ac in ["EQUITY", "DEBT", "GOVERNMENT", "CORPORATE", "MMI", "OTHER"]):
+                        
+                        # Holding instruments ko block karein
+                        if any(k in cat_upper for k in ["NCD", "%", "LTD", "LIMITED", "SUBDEBT", "SERIES", "SR "]):
+                            continue
+                            
+                        # Sirf official asset categories allow hongi
+                        if any(ac in cat_upper for ac in ["EQUITY", "DEBT", "GOVERNMENT", "CORPORATE", "MMI"]):
                             actual = ws.cell(r, c + 1).value
                             rng = ws.cell(r, c + 2).value
                             if actual is not None and cat_upper not in seen_cats:
@@ -1299,12 +1307,15 @@ with tabs[2]:
                     excel_val = item["Raw Actual"]
                     pdf_pct, diff_str, status_str = audit_line_item_against_pdf(cat_name, excel_val, pdf_text, tolerance)
                     
-                    # 100% Total Calculation: Sirf Top-Level Categories sum hongi
-                    # Agar DEBT INSTRUMENTS hai, toh G-Sec aur Corporate Debt sub-items hain, unhe double count nahi karna
-                    is_sum_eligible = True
+                   # 100% Total Calculation: STRICTLY Top-Level Pillars
+                    # Agar DEBT INSTRUMENTS hai, toh sirf EQUITY, DEBT INSTRUMENTS aur MMI count honge
+                    is_sum_eligible = False
                     if has_parent_debt:
-                        if any(sub in cat_name for sub in ["GOVERNMENT", "G-SEC", "CORPORATE DEBT", "OTHER CORPORATE"]):
-                            is_sum_eligible = False
+                        if cat_name in ["EQUITY", "DEBT INSTRUMENTS", "MMI", "MONEY MARKET INSTRUMENTS"]:
+                            is_sum_eligible = True
+                    else:
+                        if cat_name in ["EQUITY", "GOVERNMENT SECURITIES", "CORPORATE DEBT", "MMI", "MONEY MARKET INSTRUMENTS"]:
+                            is_sum_eligible = True
 
                     if is_sum_eligible:
                         total_excel_val += excel_val
