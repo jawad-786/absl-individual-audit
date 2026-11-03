@@ -359,6 +359,16 @@ with st.sidebar:
     tolerance = st.slider("Tolerance Threshold (Difference %)", 0.00, 0.10, 0.02, 0.01)
 
 @st.cache_data(show_spinner=False)
+def safe_float(val):
+    if val is None:
+        return None
+    try:
+        s = str(val).replace(",", "").replace("%", "").strip()
+        return float(s) if s else None
+    except:
+        return None
+
+@st.cache_data(show_spinner=False)
 def extract_pdf_data(pdf_bytes):
     schemes_pdf = {}
     if not pdf_bytes:
@@ -383,8 +393,15 @@ def extract_pdf_data(pdf_bytes):
             ])
             is_true_dedicated = (len(unique_sfins) <= 2) and has_detail_sections
 
-            nav_candidates = re.findall(r"\b\d{1,3}\.\d{4}\b", text)
+            # Safe NAV extraction
+            nav_candidates_raw = re.findall(r"\b\d{1,3}\.\d{4}\b", text)
+            nav_candidates = []
+            for n in nav_candidates_raw:
+                val = safe_float(n)
+                if val is not None:
+                    nav_candidates.append(round(val, 4))
 
+            # Safe AUM extraction
             aum_val = None
             m_aum_line = re.search(
                 r"(?:Asset\s+held|AUM|Assets?\s+under\s+Management).*?[₹\s]+([0-9,]+\.[0-9]{1,2})\s*(?:Cr|Crores)\b",
@@ -392,24 +409,26 @@ def extract_pdf_data(pdf_bytes):
                 re.IGNORECASE
             )
             if m_aum_line:
-                aum_val = float(m_aum_line.group(1).replace(",", ""))
+                aum_val = safe_float(m_aum_line.group(1))
             else:
                 m_cr_tokens = re.findall(r"\b([0-9,]+\.[0-9]{1,2})\s*Cr\b", text, re.IGNORECASE)
-                valid_aums = [float(x.replace(",", "")) for x in m_cr_tokens if float(x.replace(",", "")) != 109.0]
-                if valid_aums:
-                    aum_val = valid_aums[0]
+                for x in m_cr_tokens:
+                    val = safe_float(x)
+                    if val is not None and val != 109.0:
+                        aum_val = val
+                        break
 
             fm_match = re.search(r"FUND\s+MANAGER:\s*([^\r\n]+)", text, re.IGNORECASE)
             fm_val = fm_match.group(1).strip() if fm_match else ""
 
-            # Supports Colon (:), pipe (|), and optional units (years/yrs)
+            # Safe YTM & Duration regex
             ytm_match = re.search(
-                r"(?:Yield\s+to\s+Maturity|YTM)\s*[:\|]?\s*([0-9\.]+)\s*%",
+                r"(?:Yield\s+to\s+Maturity|Annualised\s+Portfolio\s+YTM|Portfolio\s+YTM|YTM|Yield)\s*[:\|\-]?\s*([0-9]+(?:\.[0-9]+)?)\s*%",
                 text,
                 re.IGNORECASE
             )
             dur_match = re.search(
-                r"(?:Modified\s+Duration|Duration)\s*[:\|]?\s*([0-9\.]+)\s*(?:years|yrs)?",
+                r"(?:Modified\s+Duration|Duration|Average\s+Maturity)\s*[:\|\-]?\s*([0-9]+(?:\.[0-9]+)?)\s*(?:years|yrs)?",
                 text,
                 re.IGNORECASE
             )
@@ -445,11 +464,11 @@ def extract_pdf_data(pdf_bytes):
                         "fund_name": best_name,
                         "page_text": text,
                         "is_true_dedicated": is_true_dedicated,
-                        "nav_candidates": [round(float(n), 4) for n in nav_candidates],
+                        "nav_candidates": nav_candidates,
                         "aum_val": aum_val,
                         "fund_manager": fm_val,
-                        "ytm": float(ytm_match.group(1)) if ytm_match else None,
-                        "mod_duration": float(dur_match.group(1)) if dur_match else None,
+                        "ytm": safe_float(ytm_match.group(1)) if ytm_match else None,
+                        "mod_duration": safe_float(dur_match.group(1)) if dur_match else None,
                     }
     except Exception as e:
         st.sidebar.error(f"Error reading PDF: {e}")
