@@ -1425,10 +1425,6 @@ with tabs[2]:
                     excel_val = s_item["Raw Weight"]
                     pdf_pct, diff_str, status_str = audit_line_item_against_pdf(sec_name, excel_val, pdf_text, tolerance)
 
-                    if "central government" not in str(sec_name).lower() and "gilt" not in str(sec_name).lower():
-                        if excel_val > 25.0:
-                            status_str = "BREACH (>25%)"
-
                     sector_audit_rows.append({
                         "Sector Name": sec_name,
                         "Master Excel (%)": f"{excel_val:.2f}%",
