@@ -1501,20 +1501,67 @@ with tabs[3]:
             })
         st.dataframe(pd.DataFrame(aum_rows), use_container_width=True, hide_index=True)
 
-# --- TAB 5: YTM & DURATION AUDIT ---
+# --- TAB 5: YTM & DURATION AUDIT (WITH CATEGORY FILTERS) ---
 with tabs[4]:
     st.subheader("📉 Yield to Maturity (YTM) & Duration Audit")
     if not ytm_data:
         st.info("💡 Sirf **`Yield, Duration Report-30.09.26.xlsx`** upload karein YTM aur Duration audit ke liye.")
     else:
+        # Category Filter for YTM
+        ytm_cat_filter = st.radio(
+            "Filter Schemes (YTM):",
+            ["All Schemes", "Individual Funds (ULIF)", "Group Funds (ULGF)"],
+            horizontal=True,
+            key="ytm_cat_filter",
+        )
+
+        # Helper to detect category from Code, SFIN, or Name
+        def get_ytm_category(code_str, name_str):
+            combined = (str(code_str) + " " + str(name_str)).upper()
+            if "ULGF" in combined or combined.startswith("GR-") or combined.startswith("GR ") or "GROUP" in combined:
+                return "Group (ULGF)"
+            elif "ULIF" in combined or combined.startswith("IND-") or combined.startswith("IND ") or "INDIVIDUAL" in combined or "PENSION" in combined:
+                return "Individual (ULIF)"
+            
+            # Check via EXHAUSTIVE_SFIN_MAP
+            for sfin_k, mapped_code in EXHAUSTIVE_SFIN_MAP.items():
+                if norm_txt(mapped_code) == norm_txt(code_str) or norm_txt(mapped_code) in norm_txt(name_str):
+                    return "Group (ULGF)" if sfin_k.startswith("ULGF") else "Individual (ULIF)"
+            
+            return "Other"
+
         ytm_rows = []
+        seen_codes = set()
+
         for code, info in ytm_data.items():
+            code_clean = str(info.get("Code", code)).strip()
+            # Duplicate entries ko filter karein (jaise name vs code aliases)
+            if code_clean in seen_codes:
+                continue
+            seen_codes.add(code_clean)
+
+            fname = info.get("Name", code_clean)
+            cat_type = get_ytm_category(code_clean, fname)
+
+            # Apply Category Filter
+            if ytm_cat_filter == "Individual Funds (ULIF)" and cat_type != "Individual (ULIF)":
+                continue
+            if ytm_cat_filter == "Group Funds (ULGF)" and cat_type != "Group (ULGF)":
+                continue
+
+            ytm_val = info.get("YTM")
+            dur_val = info.get("Duration")
+
             ytm_rows.append({
-                "Scheme Code": code,
-                "YTM (%)": f"{info['YTM']:.2f}%" if info["YTM"] else "N/A",
-                "Modified Duration": f"{info['Duration']:.2f}" if info["Duration"] else "N/A",
+                "Category": cat_type,
+                "Scheme Code": code_clean,
+                "Fund Name": fname if fname != code_clean else BUILTIN_SCHEME_NAMES.get(code_clean, code_clean),
+                "YTM (%)": f"{ytm_val:.2f}%" if ytm_val is not None else "N/A",
+                "Modified Duration": f"{dur_val:.2f}" if dur_val is not None else "N/A",
             })
-        st.dataframe(pd.DataFrame(ytm_rows), use_container_width=True, hide_index=True)
+
+        df_ytm = pd.DataFrame(ytm_rows)
+        st.dataframe(df_ytm, use_container_width=True, hide_index=True)
 
 # --- TAB 6: EXPORT COMPREHENSIVE WORKBOOK ---
 with tabs[5]:
