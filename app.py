@@ -1501,9 +1501,9 @@ with tabs[3]:
             })
         st.dataframe(pd.DataFrame(aum_rows), use_container_width=True, hide_index=True)
 
-# --- TAB 5: YTM & DURATION AUDIT (WITH CATEGORY FILTERS) ---
+# --- TAB 5: YTM & DURATION AUDIT (EXCEL VS PDF AUDIT WITH RED/GREEN STATUS) ---
 with tabs[4]:
-    st.subheader("📉 Yield to Maturity (YTM) & Duration Audit")
+    st.subheader("📉 Yield to Maturity (YTM) & Duration Audit (Excel vs. PDF)")
     if not ytm_data:
         st.info("💡 Sirf **`Yield, Duration Report-30.09.26.xlsx`** upload karein YTM aur Duration audit ke liye.")
     else:
@@ -1515,7 +1515,6 @@ with tabs[4]:
             key="ytm_cat_filter",
         )
 
-        # Helper to detect category from Code, SFIN, or Name
         def get_ytm_category(code_str, name_str):
             combined = (str(code_str) + " " + str(name_str)).upper()
             if "ULGF" in combined or combined.startswith("GR-") or combined.startswith("GR ") or "GROUP" in combined:
@@ -1523,11 +1522,9 @@ with tabs[4]:
             elif "ULIF" in combined or combined.startswith("IND-") or combined.startswith("IND ") or "INDIVIDUAL" in combined or "PENSION" in combined:
                 return "Individual (ULIF)"
             
-            # Check via EXHAUSTIVE_SFIN_MAP
             for sfin_k, mapped_code in EXHAUSTIVE_SFIN_MAP.items():
                 if norm_txt(mapped_code) == norm_txt(code_str) or norm_txt(mapped_code) in norm_txt(name_str):
                     return "Group (ULGF)" if sfin_k.startswith("ULGF") else "Individual (ULIF)"
-            
             return "Other"
 
         ytm_rows = []
@@ -1535,7 +1532,6 @@ with tabs[4]:
 
         for code, info in ytm_data.items():
             code_clean = str(info.get("Code", code)).strip()
-            # Duplicate entries ko filter karein (jaise name vs code aliases)
             if code_clean in seen_codes:
                 continue
             seen_codes.add(code_clean)
@@ -1549,19 +1545,77 @@ with tabs[4]:
             if ytm_cat_filter == "Group Funds (ULGF)" and cat_type != "Group (ULGF)":
                 continue
 
-            ytm_val = info.get("YTM")
-            dur_val = info.get("Duration")
+            excel_ytm = info.get("YTM")
+            excel_dur = info.get("Duration")
+
+            # Match with PDF Data
+            pdf_info = None
+            # 1. Search by SFIN Map
+            for sfin_k, mapped_c in EXHAUSTIVE_SFIN_MAP.items():
+                if norm_txt(mapped_c) == norm_txt(code_clean) and sfin_k in pdf_data:
+                    pdf_info = pdf_data[sfin_k]
+                    break
+            
+            # 2. Search by Fund Name or Code in PDF data
+            if not pdf_info:
+                for sfin_k, p_val in pdf_data.items():
+                    if norm_txt(p_val.get("fund_name", "")) == norm_txt(fname) or norm_txt(code_clean) in norm_txt(sfin_k):
+                        pdf_info = p_val
+                        break
+
+            pdf_ytm = pdf_info.get("ytm") if pdf_info else None
+            pdf_dur = pdf_info.get("mod_duration") if pdf_info else None
+
+            # Fallback direct search in PDF page text if regex parsed None
+            if pdf_info and (pdf_ytm is None or pdf_dur is None):
+                p_txt = pdf_info.get("page_text", "")
+                if pdf_ytm is None and excel_ytm is not None:
+                    m_y = re.search(r"Yield\s+to\s+Maturity.*?([0-9\.]+)\s*%", p_txt, re.IGNORECASE)
+                    if m_y:
+                        try: pdf_ytm = float(m_y.group(1))
+                        except: pass
+                if pdf_dur is None and excel_dur is not None:
+                    m_d = re.search(r"Modified\s+Duration.*?([0-9\.]+)", p_txt, re.IGNORECASE)
+                    if m_d:
+                        try: pdf_dur = float(m_d.group(1))
+                        except: pass
+
+            # Audit Status Calculation
+            if not uploaded_pdf:
+                status = "PENDING PDF"
+            elif pdf_info is None:
+                status = "NOT IN PDF"
+            elif pdf_ytm is None and pdf_dur is None:
+                status = "NOT IN PDF"
+            else:
+                ytm_ok = (pdf_ytm is None or excel_ytm is None or abs(pdf_ytm - excel_ytm) <= 0.05)
+                dur_ok = (pdf_dur is None or excel_dur is None or abs(pdf_dur - excel_dur) <= 0.05)
+
+                if ytm_ok and dur_ok:
+                    status = "PASS"
+                else:
+                    mismatch_parts = []
+                    if not ytm_ok and pdf_ytm and excel_ytm:
+                        mismatch_parts.append(f"YTM Diff: {abs(pdf_ytm - excel_ytm):.2f}%")
+                    if not dur_ok and pdf_dur and excel_dur:
+                        mismatch_parts.append(f"Dur Diff: {abs(pdf_dur - excel_dur):.2f}")
+                    status = f"MISMATCH ({', '.join(mismatch_parts)})"
 
             ytm_rows.append({
                 "Category": cat_type,
                 "Scheme Code": code_clean,
                 "Fund Name": fname if fname != code_clean else BUILTIN_SCHEME_NAMES.get(code_clean, code_clean),
-                "YTM (%)": f"{ytm_val:.2f}%" if ytm_val is not None else "N/A",
-                "Modified Duration": f"{dur_val:.2f}" if dur_val is not None else "N/A",
+                "Excel YTM": f"{excel_ytm:.2f}%" if excel_ytm is not None else "N/A",
+                "PDF YTM": f"{pdf_ytm:.2f}%" if pdf_ytm is not None else "N/A",
+                "Excel Duration": f"{excel_dur:.2f}" if excel_dur is not None else "N/A",
+                "PDF Duration": f"{pdf_dur:.2f}" if pdf_dur is not None else "N/A",
+                "Audit Status": status,
             })
 
         df_ytm = pd.DataFrame(ytm_rows)
-        st.dataframe(df_ytm, use_container_width=True, hide_index=True)
+        styled_ytm = apply_status_style(df_ytm, "Audit Status")
+        st.dataframe(styled_ytm, use_container_width=True, hide_index=True)
+        
 
 # --- TAB 6: EXPORT COMPREHENSIVE WORKBOOK ---
 with tabs[5]:
