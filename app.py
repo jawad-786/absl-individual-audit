@@ -142,14 +142,14 @@ def color_status_cells(val):
     return ""
 
 def apply_status_style(df, column_name):
+    # Agar DataFrame khali ho ya column na mile, crash na ho
+    if df.empty or column_name not in df.columns:
+        return df
     styler = df.style
     if hasattr(styler, "map"):
         return styler.map(color_status_cells, subset=[column_name])
     else:
         return styler.applymap(color_status_cells, subset=[column_name])
-
-def norm_txt(s):
-    return re.sub(r"[^A-Za-z0-9]", "", str(s or "")).upper()
 
 # =============================================================
 # BLOCK 3: CONTEXTUAL LINE-BY-LINE AUDIT HELPER (FUTURE-PROOF)
@@ -1123,7 +1123,8 @@ with tabs[1]:
         )
 
         aum_audit_rows = []
-        all_aum_sfins = set(list(pdf_data.keys()) + list(nav_data.keys()))
+        # SFINs from PDF, NAV, or Master data
+        all_aum_sfins = set(list(pdf_data.keys()) + list(nav_data.keys()) + list(master_data.keys()))
 
         for sfin in sorted(list(all_aum_sfins)):
             if aum_cat_filter == "Individual Funds (ULIF)" and not sfin.startswith("ULIF"):
@@ -1164,9 +1165,15 @@ with tabs[1]:
                 "Audit Status": status,
             })
 
-        df_aum_audit = pd.DataFrame(aum_audit_rows)
-        styled_aum_audit = apply_status_style(df_aum_audit, "Audit Status")
-        st.dataframe(styled_aum_audit, use_container_width=True, hide_index=True)
+        # Columns explicitly define karein taaki empty hone par bhi crash na ho
+        cols = ["Category", "SFIN Code", "Fund Name", "Excel Code", "Excel AUM (Cr)", "PDF Published AUM", "Difference", "Audit Status"]
+        df_aum_audit = pd.DataFrame(aum_audit_rows, columns=cols) if aum_audit_rows else pd.DataFrame(columns=cols)
+
+        if not df_aum_audit.empty:
+            styled_aum_audit = apply_status_style(df_aum_audit, "Audit Status")
+            st.dataframe(styled_aum_audit, use_container_width=True, hide_index=True)
+        else:
+            st.warning("⚠️ Koi matching scheme data nahi mila. Kripya check karein ki sahi files upload hui hain.")
 
 # =============================================================
 # BLOCK 8: TAB 3 (SCHEME-WISE DEEP AUDIT & 7 SUB-TABS)
