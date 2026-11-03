@@ -822,7 +822,6 @@ def parse_ytm_file(ytm_bytes):
         sheet = xls.sheet_names[0]
         df_raw = pd.read_excel(xls, sheet_name=sheet, header=None)
 
-        # 1. Header row detect karein (Row 2 scan)
         header_row_idx = 0
         for r in range(min(10, len(df_raw))):
             row_str = " ".join([str(v).upper() for v in df_raw.iloc[r] if pd.notnull(v)])
@@ -831,6 +830,78 @@ def parse_ytm_file(ytm_bytes):
                 break
 
         df = pd.read_excel(xls, sheet_name=sheet, header=header_row_idx)
+
+        code_col, name_col, ytm_col, dur_col, grp_col = None, None, None, None, None
+
+        for col in df.columns:
+            c_up = str(col).strip().upper()
+            if c_up in ["SCHEME CODE", "CODE", "SCHEME_CODE"]:
+                code_col = col
+            elif c_up in ["SCHEME NAME", "SCHEME_NAME", "FUND NAME"]:
+                name_col = col
+            elif c_up == "GROUPING":
+                grp_col = col
+            elif "YTM" in c_up:
+                ytm_col = col
+            elif c_up == "DURATION" or "MODIFIED DURATION" in c_up:
+                dur_col = col
+
+        if not code_col and len(df.columns) > 1:
+            code_col = df.columns[1]
+        if not name_col and len(df.columns) > 2:
+            name_col = df.columns[2]
+        if not ytm_col and len(df.columns) > 4:
+            ytm_col = df.columns[4]
+        if not dur_col and len(df.columns) > 5:
+            dur_col = df.columns[5]
+
+        for _, row in df.iterrows():
+            code_val = str(row.get(code_col, "")).strip() if code_col else ""
+            if not code_val or code_val in ["nan", "None", "Total", "Grand Total"]:
+                continue
+
+            name_val = str(row.get(name_col, "")).strip() if name_col else code_val
+            grp_val = str(row.get(grp_col, "")).strip() if grp_col else ""
+
+            m_sfin = re.search(r"(?:ULIF|ULGF)[A-Za-z0-9/]+?109", name_val)
+            sfin_found = m_sfin.group(0).strip() if m_sfin else None
+
+            raw_ytm = row.get(ytm_col) if ytm_col else None
+            raw_dur = row.get(dur_col) if dur_col else None
+
+            ytm_val = None
+            if pd.notnull(raw_ytm):
+                try:
+                    f_ytm = float(str(raw_ytm).replace("%", "").strip())
+                    ytm_val = f_ytm * 100 if f_ytm <= 0.30 else f_ytm
+                except:
+                    pass
+
+            dur_val = None
+            if pd.notnull(raw_dur):
+                try:
+                    dur_val = float(str(raw_dur).strip())
+                except:
+                    pass
+
+            record = {
+                "Code": code_val,
+                "Name": name_val,
+                "Grouping": grp_val,
+                "SFIN": sfin_found,
+                "YTM": ytm_val,
+                "Duration": dur_val,
+            }
+
+            ytm_dict[code_val] = record
+            if sfin_found:
+                ytm_dict[sfin_found] = record
+            if name_val and name_val != code_val:
+                ytm_dict[name_val] = record
+
+    except Exception as e:
+        st.sidebar.error(f"YTM File Error: {e}")
+    return ytm_dict
 
         # 2. Dynamic Column Mapping (Clean 8-space indentation)
         code_col = None
