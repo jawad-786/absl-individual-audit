@@ -69,6 +69,21 @@ st.markdown(
 # =============================================================
 # BLOCK 2: BUILT-IN SCHEME DIRECTORY & STYLING
 # =============================================================
+# EXACT 11 APPROVED GROUP SCHEMES WHITELIST
+APPROVED_GROUP_SFINS = {
+    "ULGF00112/06/01BSLGGROWTH109",
+    "ULGF00212/06/01BSLGSECURE109",
+    "ULGF00312/06/01BSLGSTABLE109",
+    "ULGF00416/07/02BSLGFIXINT109",
+    "ULGF00530/05/03BSLIGRBOND109",
+    "ULGF00630/05/03BSLIGRGILT109",
+    "ULGF00824/08/04BSLIGRMMKT109",
+    "ULGF01026/11/07BSLIGGRADV109",
+    "ULGF01322/09/08BSLGSHTDBT109",
+    "ULGF01425/02/10BSLGINCADV109",
+    "ULGF02311/07/25BSLCAPPRTC109",
+}
+
 BUILTIN_SCHEME_NAMES = {
     "ULGF00112/06/01BSLGGROWTH109": "Group Growth Fund",
     "ULGF00212/06/01BSLGSECURE109": "Group Secure Fund",
@@ -76,19 +91,10 @@ BUILTIN_SCHEME_NAMES = {
     "ULGF00416/07/02BSLGFIXINT109": "Group Fixed Interest Fund",
     "ULGF00530/05/03BSLIGRBOND109": "Group Bond Fund",
     "ULGF00630/05/03BSLIGRGILT109": "Group Gilt Fund",
-    "ULGF00724/08/04BSLIGFLOAT109": "Group Floating Rate Fund",
     "ULGF00824/08/04BSLIGRMMKT109": "Group Money Market Fund",
     "ULGF01026/11/07BSLIGGRADV109": "Group Growth Advantage Fund",
     "ULGF01322/09/08BSLGSHTDBT109": "Group Short Term Debt Fund",
     "ULGF01425/02/10BSLGINCADV109": "Group Income Advantage Fund",
-    "ULGF01525/02/10BSLIGRMAXI109": "Group Growth Maximiser Fund",
-    "ULGF01628/11/11BSLGRBOND2109": "Group Bond Fund II",
-    "ULGF01728/11/11BSLGFXINT2109": "Group Fixed Interest Fund II",
-    "ULGF01828/11/11BSLGROWTH2109": "Group Growth Fund II",
-    "ULGF01928/11/11BSLGRMMKT2109": "Group Money Market Fund II",
-    "ULGF02028/11/11BSLGSECUR2109": "Group Secure Fund II",
-    "ULGF02128/11/11BSLGSHTDB2109": "Group Short Term Debt Fund II",
-    "ULGF02228/11/11BSLGSTABL2109": "Group Stable Fund II",
     "ULGF02311/07/25BSLCAPPRTC109": "Group Capital Protection Fund",
     "ULIF00113/03/01BSLBUILDER109": "Individual Builder Fund",
     "ULIF00213/03/01BSLENHANCE109": "Individual Enhancer Fund",
@@ -257,7 +263,6 @@ def audit_line_item_against_pdf(item_name, excel_val, pdf_text, tolerance=0.05):
             if is_residual_other and not matches_other_category(line_clean):
                 continue
                 
-            # Ignore footnote lines for MMI
             if "MMI" in clean_item_upper and any(k in line_clean.upper() for k in ["IN CRORES", "CRORES", "₹"]):
                 continue
 
@@ -828,7 +833,8 @@ def parse_nav_file(nav_bytes):
             sfin = str(row.get("SFIN", "")).strip()
             nav = row.get("NAV Per Unit", None)
             name = row.get("Segregated Fund Name", "")
-            if sfin and (sfin.startswith("ULIF") or sfin.startswith("ULGF")) and pd.notnull(nav):
+            # Filter: ULGF sirf approved 11 schemes me se allow hoga
+            if sfin and (sfin.startswith("ULIF") or (sfin.startswith("ULGF") and sfin in APPROVED_GROUP_SFINS)) and pd.notnull(nav):
                 nav_dict[sfin] = {
                     "nav": float(nav),
                     "name": str(name).strip() if str(name).strip() else BUILTIN_SCHEME_NAMES.get(sfin, sfin),
@@ -941,19 +947,17 @@ aum_data = parse_aum_file(uploaded_aum.getvalue()) if uploaded_aum else {}
 ytm_data = parse_ytm_file(uploaded_ytm.getvalue()) if uploaded_ytm else {}
 
 EXHAUSTIVE_SFIN_MAP = {
-    # Group Funds (ULGF)
+    # Group Funds (ULGF) - STRICT 11 ACTIVE GROUP SCHEMES
     "ULGF00112/06/01BSLGGROWTH109": "GR-GROWTH",
     "ULGF00212/06/01BSLGSECURE109": "GR-PROTECTOR",
     "ULGF00312/06/01BSLGSTABLE109": "GR-STABLE",
     "ULGF00416/07/02BSLGFIXINT109": "GR-FIF",
     "ULGF00530/05/03BSLIGRBOND109": "GR-BOND",
     "ULGF00630/05/03BSLIGRGILT109": "GR-GILT",
-    "ULGF00724/08/04BSLIGFLOAT109": "BSLGRMMKT2",
     "ULGF00824/08/04BSLIGRMMKT109": "GR-MMFUND",
     "ULGF01026/11/07BSLIGGRADV109": "GR-ADVANTAGE",
     "ULGF01322/09/08BSLGSHTDBT109": "GR-DEBTFUND",
     "ULGF01425/02/10BSLGINCADV109": "GR-INC-ADV",
-    "ULGF01928/11/11BSLGRMMKT2109": "BSLGRMMKT2",
     "ULGF02311/07/25BSLCAPPRTC109": "GRCAPPROTECT",
 
     # Individual & Pension Funds (ULIF)
@@ -966,7 +970,7 @@ EXHAUSTIVE_SFIN_MAP = {
     "ULIF00704/02/04BSLCREATOR109": "IND-CREATOR",
     "ULIF00826/06/04BSLIIMAGNI109": "INDMAGNIFIER",
     "ULIF00931/05/05BSLBALANCE109": "BILICO",
-    "ULIF001008/07/05BSLIASSURE109": "IND-AF",
+    "ULIF01008/07/05BSLIASSURE109": "IND-AF",
     "ULIF01101/06/07BSLIINMAXI109": "INDMAXIMISER",
     "ULIF01217/10/07BSLINMULTI109": "IND-MULTI",
     "ULIF01507/08/08BSLIINCADV109": "INC-ADV-FUND",
@@ -1064,6 +1068,9 @@ with tabs[0]:
         )
         nav_rows = []
         for sfin, ninfo in nav_data.items():
+            # Filter: Obsolete ULGF ignore
+            if sfin.startswith("ULGF") and sfin not in APPROVED_GROUP_SFINS:
+                continue
             if cat_filter == "Individual Funds (ULIF)" and not sfin.startswith("ULIF"):
                 continue
             if cat_filter == "Group Funds (ULGF)" and not sfin.startswith("ULGF"):
@@ -1127,6 +1134,9 @@ with tabs[1]:
         all_aum_sfins = set(list(pdf_data.keys()) + list(nav_data.keys()) + list(master_data.keys()))
 
         for sfin in sorted(list(all_aum_sfins)):
+            # Filter: Obsolete ULGF ignore
+            if sfin.startswith("ULGF") and sfin not in APPROVED_GROUP_SFINS:
+                continue
             if aum_cat_filter == "Individual Funds (ULIF)" and not sfin.startswith("ULIF"):
                 continue
             if aum_cat_filter == "Group Funds (ULGF)" and not sfin.startswith("ULGF"):
@@ -1183,6 +1193,9 @@ with tabs[2]:
     all_possible_sfins = set(list(master_data.keys()) + list(pdf_data.keys()))
 
     for sfin_item in all_possible_sfins:
+        # Filter: Obsolete ULGF ignore
+        if sfin_item.startswith("ULGF") and sfin_item not in APPROVED_GROUP_SFINS:
+            continue
         m_name = master_data.get(sfin_item, {}).get("fund_name") if sfin_item in master_data else None
         n_name = nav_data.get(sfin_item, {}).get("name") if sfin_item in nav_data else None
         p_name = pdf_data.get(sfin_item, {}).get("fund_name") if sfin_item in pdf_data else None
