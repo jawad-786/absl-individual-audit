@@ -995,9 +995,8 @@ EXHAUSTIVE_SFIN_MAP = {
     "ULIF04510/09/26ABSLPENINA109": "ABSLPENINA",
 }
 
-def get_exact_aum_for_sfin(sfin, fund_name, aum_dict):
-    if not aum_dict:
-        return None, None
+def norm_txt(s):
+    return re.sub(r"[^A-Za-z0-9]", "", str(s or "")).upper()
 
     target_code = EXHAUSTIVE_SFIN_MAP.get(sfin)
     if target_code and target_code in aum_dict:
@@ -1707,3 +1706,40 @@ with tabs[5]:
         file_name="ABSLI_Factsheet_Audit_Summary_Sep2026.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
+
+# =============================================================
+# HELPER: NORMALIZE TEXT & AUM MATCHING (SAFE FIX)
+# =============================================================
+def norm_txt(s):
+    return re.sub(r"[^A-Za-z0-9]", "", str(s or "")).upper()
+
+
+def get_exact_aum_for_sfin(sfin, fund_name, aum_dict):
+    if not aum_dict:
+        return None, None
+
+    target_code = EXHAUSTIVE_SFIN_MAP.get(sfin)
+    if target_code and target_code in aum_dict:
+        return target_code, aum_dict[target_code]["Total AUM (Cr)"]
+
+    if target_code:
+        norm_t = norm_txt(target_code)
+        for c, info in aum_dict.items():
+            if norm_txt(c) == norm_t:
+                return c, info["Total AUM (Cr)"]
+
+    if fund_name:
+        norm_f = norm_txt(fund_name)
+        for c, info in aum_dict.items():
+            name_val = info.get("Name", "")
+            if name_val and norm_txt(name_val) == norm_f:
+                return c, info["Total AUM (Cr)"]
+            if norm_txt(c) == norm_f:
+                return c, info["Total AUM (Cr)"]
+
+    norm_s = norm_txt(sfin)
+    for c, info in aum_dict.items():
+        if len(c) >= 4 and norm_txt(c) in norm_s:
+            return c, info["Total AUM (Cr)"]
+
+    return None, None
