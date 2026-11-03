@@ -1269,6 +1269,7 @@ with tabs[2]:
                     "DEBT INSTRUMENTS",
                     "GOVERNMENT SECURITIES",
                     "CORPORATE DEBT",
+                    "OTHER CORPORATE DEBT",
                     "MMI",
                 ]
 
@@ -1285,6 +1286,9 @@ with tabs[2]:
                 ]
                 sorted_alloc = sorted(alloc_items, key=lambda x: get_asset_sort_key(x["Asset Category"]))
 
+                # Check agar main parent "DEBT INSTRUMENTS" maujood hai
+                has_parent_debt = any("DEBT INSTRUMENTS" in item["Asset Category"].upper() for item in sorted_alloc)
+
                 alloc_rows = []
                 total_excel_val = 0.0
                 total_pdf_val = 0.0
@@ -1295,13 +1299,21 @@ with tabs[2]:
                     excel_val = item["Raw Actual"]
                     pdf_pct, diff_str, status_str = audit_line_item_against_pdf(cat_name, excel_val, pdf_text, tolerance)
                     
-                    total_excel_val += excel_val
-                    if pdf_pct not in ["NOT IN PDF", "N/A", "PENDING PDF"]:
-                        try:
-                            total_pdf_val += float(pdf_pct.replace("%", "").strip())
-                            has_pdf_values = True
-                        except:
-                            pass
+                    # 100% Total Calculation: Sirf Top-Level Categories sum hongi
+                    # Agar DEBT INSTRUMENTS hai, toh G-Sec aur Corporate Debt sub-items hain, unhe double count nahi karna
+                    is_sum_eligible = True
+                    if has_parent_debt:
+                        if any(sub in cat_name for sub in ["GOVERNMENT", "G-SEC", "CORPORATE DEBT", "OTHER CORPORATE"]):
+                            is_sum_eligible = False
+
+                    if is_sum_eligible:
+                        total_excel_val += excel_val
+                        if pdf_pct not in ["NOT IN PDF", "N/A", "PENDING PDF"]:
+                            try:
+                                total_pdf_val += float(pdf_pct.replace("%", "").strip())
+                                has_pdf_values = True
+                            except:
+                                pass
 
                     rng = str(item.get("Defined Mandate Range", "N/A"))
                     alloc_rows.append({
