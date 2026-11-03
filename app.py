@@ -403,8 +403,17 @@ def extract_pdf_data(pdf_bytes):
             fm_match = re.search(r"FUND\s+MANAGER:\s*([^\r\n]+)", text, re.IGNORECASE)
             fm_val = fm_match.group(1).strip() if fm_match else ""
 
-            ytm_match = re.search(r"Yield\s+to\s+Maturity\s*\|?\s*([\d\.]+)%", text, re.IGNORECASE)
-            dur_match = re.search(r"Modified\s+Duration\s*\|?\s*([\d\.]+)", text, re.IGNORECASE)
+           # Colon (:), pipe (|), and optional units (years/yrs) supported
+            ytm_match = re.search(
+                r"(?:Yield\s+to\s+Maturity|YTM)\s*[:\|]?\s*([0-9\.]+)\s*%",
+                text,
+                re.IGNORECASE
+            )
+            dur_match = re.search(
+                r"(?:Modified\s+Duration|Duration)\s*[:\|]?\s*([0-9\.]+)\s*(?:years|yrs)?",
+                text,
+                re.IGNORECASE
+            )
 
             header_fund_name = None
             for line in text.split("\n")[:10]:
