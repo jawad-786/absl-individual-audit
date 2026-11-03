@@ -1516,7 +1516,7 @@ with tabs[3]:
             })
         st.dataframe(pd.DataFrame(aum_rows), use_container_width=True, hide_index=True)
 
-# --- TAB 5: YTM & DURATION AUDIT (EXACT 11 GROUP FUNDS WHITELIST) ---
+# --- TAB 5: YTM & DURATION AUDIT (GLOBAL MULTI-PAGE SCAN FOR ALL 11 SCHEMES) ---
 with tabs[4]:
     st.subheader("📉 Yield to Maturity (YTM) & Duration Audit (Excel vs. PDF)")
     if not ytm_data:
@@ -1529,32 +1529,37 @@ with tabs[4]:
             key="ytm_cat_filter",
         )
 
-        # STRICT 11 GROUP FUNDS WHITELIST (Exact Image Mapping)
         EXACT_GROUP_SCHEMES = {
-            "GR-PROTECTOR": {"name": "Group Secure Fund", "sfin": "ULGF00212/06/01BSLGSECURE109"},
-            "GR-STABLE": {"name": "Group Stable Fund", "sfin": "ULGF00312/06/01BSLGSTABLE109"},
-            "GR-GROWTH": {"name": "Group Growth Fund", "sfin": "ULGF00112/06/01BSLGGROWTH109"},
-            "GR-ADVANTAGE": {"name": "Group Growth Advantage Fund", "sfin": "ULGF01026/11/07BSLIGGRADV109"},
-            "GR-MMFUND": {"name": "Group Money Market Fund", "sfin": "ULGF00824/08/04BSLIGRMMKT109"},
-            "GR-DEBTFUND": {"name": "Group Short Term Debt Fund", "sfin": "ULGF01322/09/08BSLGSHTDBT109"},
-            "GR-INC-ADV": {"name": "Group Income Advantage Fund", "sfin": "ULGF01425/02/10BSLGINCADV109"},
-            "GR-GILT": {"name": "Group Gilt Fund", "sfin": "ULGF00630/05/03BSLIGRGILT109"},
-            "GR-BOND": {"name": "Group Bond Fund", "sfin": "ULGF00530/05/03BSLIGRBOND109"},
-            "GR-FIF": {"name": "Group Fixed Interest Fund", "sfin": "ULGF00416/07/02BSLGFIXINT109"},
-            "GRCAPPROTECT": {"name": "Group Capital Protection Fund", "sfin": "ULGF02311/07/25BSLCAPPRTC109"},
+            "GR-PROTECTOR": {"name": "Group Secure Fund", "sfin": "ULGF00212/06/01BSLGSECURE109", "aliases": ["SECURE FUND", "BSLGSECURE"]},
+            "GR-STABLE": {"name": "Group Stable Fund", "sfin": "ULGF00312/06/01BSLGSTABLE109", "aliases": ["STABLE FUND", "BSLGSTABLE"]},
+            "GR-GROWTH": {"name": "Group Growth Fund", "sfin": "ULGF00112/06/01BSLGGROWTH109", "aliases": ["GROWTH FUND", "BSLGGROWTH"]},
+            "GR-ADVANTAGE": {"name": "Group Growth Advantage Fund", "sfin": "ULGF01026/11/07BSLIGGRADV109", "aliases": ["GROWTH ADVANTAGE", "BSLIGGRADV"]},
+            "GR-MMFUND": {"name": "Group Money Market Fund", "sfin": "ULGF00824/08/04BSLIGRMMKT109", "aliases": ["MONEY MARKET", "BSLIGRMMKT"]},
+            "GR-DEBTFUND": {"name": "Group Short Term Debt Fund", "sfin": "ULGF01322/09/08BSLGSHTDBT109", "aliases": ["SHORT TERM DEBT", "BSLGSHTDBT"]},
+            "GR-INC-ADV": {"name": "Group Income Advantage Fund", "sfin": "ULGF01425/02/10BSLGINCADV109", "aliases": ["INCOME ADVANTAGE", "BSLGINCADV"]},
+            "GR-GILT": {"name": "Group Gilt Fund", "sfin": "ULGF00630/05/03BSLIGRGILT109", "aliases": ["GILT FUND", "BSLIGRGILT"]},
+            "GR-BOND": {"name": "Group Bond Fund", "sfin": "ULGF00530/05/03BSLIGRBOND109", "aliases": ["BOND FUND", "BSLIGRBOND"]},
+            "GR-FIF": {"name": "Group Fixed Interest Fund", "sfin": "ULGF00416/07/02BSLGFIXINT109", "aliases": ["FIXED INTEREST", "BSLGFIXINT"]},
+            "GRCAPPROTECT": {"name": "Group Capital Protection Fund", "sfin": "ULGF02311/07/25BSLCAPPRTC109", "aliases": ["CAPITAL PROTECTION", "BSLCAPPRTC"]},
         }
 
+        # Cache all PDF pages raw text for cross-page lookups
+        all_pdf_pages = []
+        if uploaded_pdf:
+            try:
+                r_doc = pypdf.PdfReader(io.BytesIO(uploaded_pdf.getvalue()))
+                all_pdf_pages = [p.extract_text() or "" for p in r_doc.pages]
+            except:
+                pass
+
         def get_ytm_category(code_str, name_str, grp_str):
-            combined = (str(code_str) + " " + str(name_str) + " " + str(grp_str)).upper()
             if code_str in EXACT_GROUP_SCHEMES:
                 return "Group (ULGF)"
+            combined = (str(code_str) + " " + str(name_str) + " " + str(grp_str)).upper()
             if "GROUP" in combined or "ULGF" in combined or combined.startswith("GR-"):
                 return "Group (ULGF)"
             elif "INDIVIDUAL" in combined or "PENSION" in combined or "ULIF" in combined or combined.startswith("IND-"):
                 return "Individual (ULIF)"
-            for sfin_k, mapped_code in EXHAUSTIVE_SFIN_MAP.items():
-                if norm_txt(mapped_code) == norm_txt(code_str) or norm_txt(mapped_code) in norm_txt(name_str):
-                    return "Group (ULGF)" if sfin_k.startswith("ULGF") else "Individual (ULIF)"
             return "Other"
 
         ytm_rows = []
@@ -1570,125 +1575,76 @@ with tabs[4]:
             grp_val = info.get("Grouping", "")
             cat_type = get_ytm_category(code_clean, fname, grp_val)
 
-            # RULE: Group category mein sirf exact 11 schemes allow hongi
+            # Rule: Group me sirf exact 11 schemes
             if cat_type == "Group (ULGF)" and code_clean not in EXACT_GROUP_SCHEMES:
                 continue
 
-            # Apply UI Filter
             if ytm_cat_filter == "Individual Funds (ULIF)" and cat_type != "Individual (ULIF)":
                 continue
             if ytm_cat_filter == "Group Funds (ULGF)" and cat_type != "Group (ULGF)":
                 continue
 
-            excel_ytm = info.get("YTM")
             excel_dur = info.get("Duration")
-            sfin_in_record = info.get("SFIN") or EXACT_GROUP_SCHEMES.get(code_clean, {}).get("sfin")
+            sfin_target = info.get("SFIN") or EXACT_GROUP_SCHEMES.get(code_clean, {}).get("sfin")
+            scheme_meta = EXACT_GROUP_SCHEMES.get(code_clean, {})
+            aliases = scheme_meta.get("aliases", []) + [code_clean, scheme_meta.get("name", "")]
 
-            # 1. Match Scheme in PDF
-            pdf_info = None
-            if sfin_in_record and sfin_in_record in pdf_data:
-                pdf_info = pdf_data[sfin_in_record]
+            # 1. Scheme Text Gathering (Dedicated Page + Multi-Page Cross Scan)
+            combined_scheme_text = ""
+            if sfin_target and sfin_target in pdf_data:
+                combined_scheme_text += "\n" + pdf_data[sfin_target].get("page_text", "")
 
-            if not pdf_info and sfin_in_record:
-                norm_target_sfin = norm_txt(sfin_in_record)
-                for sfin_k, p_val in pdf_data.items():
-                    if norm_txt(sfin_k) == norm_target_sfin or norm_target_sfin in norm_txt(sfin_k):
-                        pdf_info = p_val
-                        break
+            # Scan across all PDF pages if duration is missing
+            matching_pages_text = []
+            for p_text in all_pdf_pages:
+                p_up = p_text.upper()
+                if sfin_target and norm_txt(sfin_target) in norm_txt(p_up):
+                    matching_pages_text.append(p_text)
+                elif any(a.upper() in p_up for a in aliases if len(a) > 3):
+                    matching_pages_text.append(p_text)
 
-            if not pdf_info:
-                for sfin_k, mapped_c in EXHAUSTIVE_SFIN_MAP.items():
-                    if norm_txt(mapped_c) == norm_txt(code_clean) and sfin_k in pdf_data:
-                        pdf_info = pdf_data[sfin_k]
-                        break
+            search_scope_text = combined_scheme_text + "\n" + "\n".join(matching_pages_text)
 
-            if not pdf_info:
-                clean_target = norm_txt(re.sub(r"(?:ULIF|ULGF)[A-Za-z0-9/\-]+", "", fname))
-                for sfin_k, p_val in pdf_data.items():
-                    p_name_clean = norm_txt(p_val.get("fund_name", ""))
-                    if clean_target and (clean_target in p_name_clean or p_name_clean in clean_target):
-                        pdf_info = p_val
-                        break
-
-            pdf_ytm = None
             pdf_dur = None
 
-            if pdf_info:
-                p_txt = pdf_info.get("page_text", "")
+            # Pattern A: Standard Banner Match (Modified Duration: 7.78 years)
+            m_dur = re.search(
+                r"(?:Modified\s+Duration|Duration|Average\s+Maturity)\s*[:\|\-]?\s*([0-9]{1,2}\.[0-9]{1,2})\s*(?:years|yrs)?",
+                search_scope_text,
+                re.IGNORECASE
+            )
+            if m_dur:
+                try:
+                    pdf_dur = float(m_dur.group(1))
+                except:
+                    pass
 
-                # Duration Extraction (Banner, Colon, Hyphen, Newlines, Units)
-                m_dur = re.search(
-                    r"(?:Modified\s+Duration|Duration|Average\s+Maturity)\s*[:\|\-]?\s*([0-9]{1,2}\.[0-9]{1,2})\s*(?:years|yrs)?",
-                    p_txt,
-                    re.IGNORECASE
-                )
-                if m_dur:
-                    try:
-                        pdf_dur = float(m_dur.group(1))
-                    except:
-                        pass
-                elif pdf_info.get("mod_duration") is not None:
-                    pdf_dur = pdf_info.get("mod_duration")
+            # Pattern B: Value Proximity Verification on matched pages
+            if pdf_dur is None and excel_dur is not None:
+                d_str = f"{excel_dur:.2f}"
+                if re.search(rf"\b{re.escape(d_str)}\s*(?:years|yrs)?\b", search_scope_text, re.IGNORECASE):
+                    pdf_dur = excel_dur
 
-                # Duration Value Proximity Check
-                if pdf_dur is None and excel_dur is not None:
-                    d_str = f"{excel_dur:.2f}"
-                    if re.search(rf"\b{re.escape(d_str)}\s*(?:years|yrs)?\b", p_txt, re.IGNORECASE):
-                        pdf_dur = excel_dur
-
-                # YTM Extraction
-                m_ytm = re.search(
-                    r"(?:Yield\s+to\s+Maturity|Annualised\s+Portfolio\s+YTM|Portfolio\s+YTM|YTM|Yield)\s*[:\|\-]?\s*([0-9]{1,2}\.[0-9]{1,2})\s*%?",
-                    p_txt,
-                    re.IGNORECASE
-                )
-                if m_ytm:
-                    try:
-                        pdf_ytm = float(m_ytm.group(1))
-                    except:
-                        pass
-                elif pdf_info.get("ytm") is not None:
-                    pdf_ytm = pdf_info.get("ytm")
-
-                if pdf_ytm is None and excel_ytm is not None:
-                    y_str = f"{excel_ytm:.2f}"
-                    if re.search(rf"\b{re.escape(y_str)}\s*%", p_txt):
-                        pdf_ytm = excel_ytm
-
-            # 2. Audit Status
+            # Status Evaluation
             if not uploaded_pdf:
                 status = "PENDING PDF"
-            elif pdf_info is None:
+            elif not search_scope_text.strip():
                 status = "NOT IN PDF"
-            elif pdf_ytm is None and pdf_dur is None:
+            elif pdf_dur is None:
                 status = "NOT IN PDF"
             else:
-                ytm_ok = (pdf_ytm is None or excel_ytm is None or abs(pdf_ytm - excel_ytm) <= 0.05)
-                dur_ok = (pdf_dur is None or excel_dur is None or abs(pdf_dur - excel_dur) <= 0.05)
-
-                if ytm_ok and dur_ok:
+                dur_diff = abs(pdf_dur - excel_dur) if (pdf_dur is not None and excel_dur is not None) else 0.0
+                if dur_diff <= 0.05:
                     status = "PASS"
                 else:
-                    parts = []
-                    if not ytm_ok and pdf_ytm and excel_ytm:
-                        parts.append(f"YTM Diff: {abs(pdf_ytm - excel_ytm):.2f}%")
-                    if not dur_ok and pdf_dur and excel_dur:
-                        parts.append(f"Dur Diff: {abs(pdf_dur - excel_dur):.2f}")
-                    status = f"MISMATCH ({', '.join(parts)})"
+                    status = f"MISMATCH (Diff: {dur_diff:.2f})"
 
-            # Display Proper Fund Name
-            display_name = EXACT_GROUP_SCHEMES.get(code_clean, {}).get("name")
-            if not display_name:
-                display_name = re.sub(r"^(?:ULIF|ULGF)[A-Za-z0-9/\-]+", "", fname).strip()
-            if not display_name:
-                display_name = BUILTIN_SCHEME_NAMES.get(sfin_in_record, fname)
+            display_name = scheme_meta.get("name") or fname
 
             ytm_rows.append({
                 "Category": cat_type,
                 "Scheme Code": code_clean,
                 "Fund Name": display_name,
-                "Excel YTM": f"{excel_ytm:.2f}%" if excel_ytm is not None else "N/A",
-                "PDF YTM": f"{pdf_ytm:.2f}%" if pdf_ytm is not None else "N/A",
                 "Excel Duration": f"{excel_dur:.2f}" if excel_dur is not None else "N/A",
                 "PDF Duration": f"{pdf_dur:.2f}" if pdf_dur is not None else "N/A",
                 "Audit Status": status,
