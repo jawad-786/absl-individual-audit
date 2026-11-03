@@ -1522,12 +1522,22 @@ with tabs[4]:
     if not ytm_data:
         st.info("💡 Sirf **`Yield, Duration Report-30.09.26.xlsx`** upload karein YTM aur Duration audit ke liye.")
     else:
-        ytm_cat_filter = st.radio(
-            "Filter Schemes (YTM):",
-            ["All Schemes", "Individual Funds (ULIF)", "Group Funds (ULGF)"],
-            horizontal=True,
-            key="ytm_cat_filter",
-        )
+        # Filter & Toggle Bar
+        col_f1, col_f2 = st.columns([3, 2])
+        with col_f1:
+            ytm_cat_filter = st.radio(
+                "Filter Schemes (YTM):",
+                ["All Schemes", "Individual Funds (ULIF)", "Group Funds (ULGF)"],
+                horizontal=True,
+                key="ytm_cat_filter",
+            )
+        with col_f2:
+            st.write("")  # Alignment spacing
+            hide_not_in_pdf = st.checkbox(
+                "👉 Hide 'NOT IN PDF' Schemes",
+                value=True,
+                help="Tick karne par sirf wahi schemes show hongi jo Factsheet PDF ke andar published hain."
+            )
 
         def get_ytm_category(code_str, name_str, grp_str):
             combined = (str(code_str) + " " + str(name_str) + " " + str(grp_str)).upper()
@@ -1595,7 +1605,7 @@ with tabs[4]:
             if pdf_info:
                 p_txt = pdf_info.get("page_text", "")
 
-                # A. Flexible YTM Extraction (Yield to Maturity / Portfolio YTM / YTM)
+                # A. Flexible YTM Extraction
                 m_ytm = re.search(
                     r"(?:Yield\s+to\s+Maturity|Annualised\s+Portfolio\s+YTM|Portfolio\s+YTM|YTM|Yield)\s*[:\|\-]?\s*([0-9]{1,2}\.[0-9]{1,2})\s*%?",
                     p_txt,
@@ -1609,13 +1619,12 @@ with tabs[4]:
                 elif pdf_info.get("ytm") is not None:
                     pdf_ytm = pdf_info.get("ytm")
 
-                # YTM Proximity Fallback (if exact percentage is printed on page)
                 if pdf_ytm is None and excel_ytm is not None:
                     y_str = f"{excel_ytm:.2f}"
                     if re.search(rf"\b{re.escape(y_str)}\s*%", p_txt):
                         pdf_ytm = excel_ytm
 
-                # B. Flexible Duration Extraction (Supports :, -, |, newlines, and years/yrs)
+                # B. Flexible Duration Extraction
                 m_dur = re.search(
                     r"(?:Modified\s+Duration|Duration)\s*[:\|\-]?\s*([0-9]{1,2}\.[0-9]{1,2})\s*(?:years|yrs)?",
                     p_txt,
@@ -1629,7 +1638,6 @@ with tabs[4]:
                 elif pdf_info.get("mod_duration") is not None:
                     pdf_dur = pdf_info.get("mod_duration")
 
-                # Duration Proximity Fallback (e.g. '5.56 years' or standalone '5.56' in InDesign banner)
                 if pdf_dur is None and excel_dur is not None:
                     d_str = f"{excel_dur:.2f}"
                     if re.search(rf"\b{re.escape(d_str)}\s*(?:years|yrs)?\b", p_txt, re.IGNORECASE):
@@ -1655,6 +1663,10 @@ with tabs[4]:
                     if not dur_ok and pdf_dur and excel_dur:
                         parts.append(f"Dur Diff: {abs(pdf_dur - excel_dur):.2f}")
                     status = f"MISMATCH ({', '.join(parts)})"
+
+            # 3. Filter Out "NOT IN PDF" if Checkbox is Checked
+            if hide_not_in_pdf and status == "NOT IN PDF":
+                continue
 
             # Clean Display Name
             display_name = re.sub(r"^(?:ULIF|ULGF)[A-Za-z0-9/\-]+", "", fname).strip()
