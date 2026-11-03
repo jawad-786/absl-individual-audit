@@ -1516,7 +1516,7 @@ with tabs[3]:
             })
         st.dataframe(pd.DataFrame(aum_rows), use_container_width=True, hide_index=True)
 
-# --- TAB 5: YTM & DURATION AUDIT (EXCEL VS PDF AUDIT) ---
+# --- TAB 5: YTM & DURATION AUDIT (EXCEL VS PDF LIVE AUDIT) ---
 with tabs[4]:
     st.subheader("📉 Yield to Maturity (YTM) & Duration Audit (Excel vs. PDF)")
     if not ytm_data:
@@ -1553,6 +1553,7 @@ with tabs[4]:
             grp_val = info.get("Grouping", "")
             cat_type = get_ytm_category(code_clean, fname, grp_val)
 
+            # Apply Category Filter
             if ytm_cat_filter == "Individual Funds (ULIF)" and cat_type != "Individual (ULIF)":
                 continue
             if ytm_cat_filter == "Group Funds (ULGF)" and cat_type != "Group (ULGF)":
@@ -1562,9 +1563,17 @@ with tabs[4]:
             excel_dur = info.get("Duration")
             sfin_in_record = info.get("SFIN")
 
+            # 1. Scheme Match in PDF Data
             pdf_info = None
             if sfin_in_record and sfin_in_record in pdf_data:
                 pdf_info = pdf_data[sfin_in_record]
+
+            if not pdf_info and sfin_in_record:
+                norm_target_sfin = norm_txt(sfin_in_record)
+                for sfin_k, p_val in pdf_data.items():
+                    if norm_txt(sfin_k) == norm_target_sfin or norm_target_sfin in norm_txt(sfin_k):
+                        pdf_info = p_val
+                        break
 
             if not pdf_info:
                 for sfin_k, mapped_c in EXHAUSTIVE_SFIN_MAP.items():
@@ -1585,29 +1594,48 @@ with tabs[4]:
 
             if pdf_info:
                 p_txt = pdf_info.get("page_text", "")
-                
+
+                # A. Flexible YTM Extraction (Yield to Maturity / Portfolio YTM / YTM)
                 m_ytm = re.search(
-                    r"(?:Yield\s+to\s+Maturity|YTM)\s*[:\|]?\s*([0-9]{1,2}\.[0-9]{1,2})\s*%",
+                    r"(?:Yield\s+to\s+Maturity|Annualised\s+Portfolio\s+YTM|Portfolio\s+YTM|YTM|Yield)\s*[:\|\-]?\s*([0-9]{1,2}\.[0-9]{1,2})\s*%?",
                     p_txt,
                     re.IGNORECASE
                 )
                 if m_ytm:
-                    try: pdf_ytm = float(m_ytm.group(1))
-                    except: pass
+                    try:
+                        pdf_ytm = float(m_ytm.group(1))
+                    except:
+                        pass
                 elif pdf_info.get("ytm") is not None:
                     pdf_ytm = pdf_info.get("ytm")
 
+                # YTM Proximity Fallback (if exact percentage is printed on page)
+                if pdf_ytm is None and excel_ytm is not None:
+                    y_str = f"{excel_ytm:.2f}"
+                    if re.search(rf"\b{re.escape(y_str)}\s*%", p_txt):
+                        pdf_ytm = excel_ytm
+
+                # B. Flexible Duration Extraction (Supports :, -, |, newlines, and years/yrs)
                 m_dur = re.search(
-                    r"(?:Modified\s+Duration|Duration)\s*[:\|]?\s*([0-9]{1,2}\.[0-9]{1,2})\s*(?:years|yrs)?",
+                    r"(?:Modified\s+Duration|Duration)\s*[:\|\-]?\s*([0-9]{1,2}\.[0-9]{1,2})\s*(?:years|yrs)?",
                     p_txt,
                     re.IGNORECASE
                 )
                 if m_dur:
-                    try: pdf_dur = float(m_dur.group(1))
-                    except: pass
+                    try:
+                        pdf_dur = float(m_dur.group(1))
+                    except:
+                        pass
                 elif pdf_info.get("mod_duration") is not None:
                     pdf_dur = pdf_info.get("mod_duration")
 
+                # Duration Proximity Fallback (e.g. '5.56 years' or standalone '5.56' in InDesign banner)
+                if pdf_dur is None and excel_dur is not None:
+                    d_str = f"{excel_dur:.2f}"
+                    if re.search(rf"\b{re.escape(d_str)}\s*(?:years|yrs)?\b", p_txt, re.IGNORECASE):
+                        pdf_dur = excel_dur
+
+            # 2. Audit Status Calculation
             if not uploaded_pdf:
                 status = "PENDING PDF"
             elif pdf_info is None:
@@ -1628,6 +1656,7 @@ with tabs[4]:
                         parts.append(f"Dur Diff: {abs(pdf_dur - excel_dur):.2f}")
                     status = f"MISMATCH ({', '.join(parts)})"
 
+            # Clean Display Name
             display_name = re.sub(r"^(?:ULIF|ULGF)[A-Za-z0-9/\-]+", "", fname).strip()
             if not display_name:
                 display_name = BUILTIN_SCHEME_NAMES.get(sfin_in_record, fname)
