@@ -1274,6 +1274,7 @@ with tabs[2]:
             if s_master and s_master["asset_allocation"]:
                 TARGET_ASSET_ORDER = [
                     "EQUITY",
+                    "DEBT INSTRUMENTS & MMI",
                     "DEBT INSTRUMENTS",
                     "GOVERNMENT SECURITIES",
                     "CORPORATE DEBT",
@@ -1294,28 +1295,26 @@ with tabs[2]:
                 ]
                 sorted_alloc = sorted(alloc_items, key=lambda x: get_asset_sort_key(x["Asset Category"]))
 
-                # Check agar main parent "DEBT INSTRUMENTS" maujood hai
-                has_parent_debt = any("DEBT INSTRUMENTS" in item["Asset Category"].upper() for item in sorted_alloc)
-
                 alloc_rows = []
                 total_excel_val = 0.0
                 total_pdf_val = 0.0
                 has_pdf_values = False
 
                 for item in sorted_alloc:
-                    cat_name = item["Asset Category"].upper()
+                    cat_name = item["Asset Category"].upper().strip()
                     excel_val = item["Raw Actual"]
+                    rng = str(item.get("Defined Mandate Range", "N/A")).strip()
+                    
                     pdf_pct, diff_str, status_str = audit_line_item_against_pdf(cat_name, excel_val, pdf_text, tolerance)
                     
-                   # 100% Total Calculation: STRICTLY Top-Level Pillars
-                    # Agar DEBT INSTRUMENTS hai, toh sirf EQUITY, DEBT INSTRUMENTS aur MMI count honge
-                    is_sum_eligible = False
-                    if has_parent_debt:
-                        if cat_name in ["EQUITY", "DEBT INSTRUMENTS", "MMI", "MONEY MARKET INSTRUMENTS"]:
-                            is_sum_eligible = True
-                    else:
-                        if cat_name in ["EQUITY", "GOVERNMENT SECURITIES", "CORPORATE DEBT", "MMI", "MONEY MARKET INSTRUMENTS"]:
-                            is_sum_eligible = True
+                    # 100% Total Calculation: Range-Based Dynamic Filter
+                    # Sirf wahi top-level pillars add honge jinki Mandate Range define hai (e.g. 30%-60%, 40%-70%)
+                    is_sum_eligible = (
+                        rng != "N/A"
+                        and rng != ""
+                        and rng != "None"
+                        and "%" in rng
+                    )
 
                     if is_sum_eligible:
                         total_excel_val += excel_val
@@ -1326,7 +1325,6 @@ with tabs[2]:
                             except:
                                 pass
 
-                    rng = str(item.get("Defined Mandate Range", "N/A"))
                     alloc_rows.append({
                         "Asset Category": cat_name,
                         "Master Excel (%)": f"{excel_val:.2f}%",
